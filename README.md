@@ -1,4 +1,25 @@
-# amukan-backend
+# Setup del Proyecto
+
+## Requisitos
+- Tener instalado: [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- Clonar este repositorio
+
+---
+
+## ¿Qué incluye este entorno?
+- Python 3.13
+- Django con GDAL
+- Base de datos PostgreSQL + PostGIS
+- Volumen persistente para guardar datos de la BD
+
+---
+
+## ¿Cómo levantar el entorno?
+
+```bash
+docker-compose build
+docker-compose up
+```
 
 ## ⚠️ Licencia y uso
 

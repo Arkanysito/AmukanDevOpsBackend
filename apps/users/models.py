@@ -1,0 +1,51 @@
+from django.db import models
+import uuid
+from apps.core.constants import Currency, Language, Nationality, Gender
+
+class TravelerType(models.Model):
+    traveler_type_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=50)
+    description = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    recommendation_model_version = models.IntegerField()
+
+class User(models.Model):
+    user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    traveler_type_id = models.ForeignKey(
+        TravelerType,
+        null=True, blank=True,
+        on_delete=models.SET_NULL
+    )
+    email = models.EmailField(max_length=255, unique=True)
+    password = models.CharField(max_length=255)
+    username = models.CharField(max_length=100)
+    gender = models.CharField(max_length=1, choices=Gender.choices, default=Gender.UNSPECIFIED)
+    nationality = models.CharField(max_length=2, choices=Nationality.choices)
+    language = models.CharField(max_length=2, choices=Language.choices)
+    currency = models.CharField(max_length=3, choices=Currency.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    recommendation_model_version = models.IntegerField(null=True, blank=True)
+
+
+class Interest(models.Model):
+    interest_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=100)
+
+class UserInterest(models.Model):
+    user_id = models.ForeignKey(User, on_delete=models.CASCADE)
+    interest_id = models.ForeignKey(Interest, on_delete=models.CASCADE)
+    weight = models.DecimalField(max_digits=3, decimal_places=2)
+
+    class Meta:
+        unique_together = ('user_id', 'interest_id')
+
+class UserTravelerTypeHistory(models.Model):
+    history_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    traveler_type_id = models.ForeignKey(TravelerType, on_delete=models.SET_NULL, null=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    recommendation_model_score = models.DecimalField(max_digits=5, decimal_places=4)
+    recommendation_model_version = models.IntegerField()
+
+

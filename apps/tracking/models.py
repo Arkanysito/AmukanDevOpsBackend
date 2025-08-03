@@ -1,0 +1,24 @@
+from django.db import models
+import uuid
+from apps.users.models import User
+from apps.core.constants import InteractionAction, ObjectType
+
+class Interaction(models.Model):
+    interaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    session_id = models.CharField(max_length=255)
+
+    object_id = models.UUIDField()
+    object_type = models.CharField(max_length=50, choices=ObjectType.choices)
+
+    action = models.CharField(max_length=20, choices=InteractionAction.choices)
+    interaction_date = models.DateTimeField(auto_now_add=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, null=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['object_type', 'object_id']),
+        ]
+
+

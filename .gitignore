@@ -1,0 +1,35 @@
+# Django-specific files
+*.log
+*.pot
+*.pyc
+__pycache__/
+local_settings.py
+db.sqlite3
+media/
+static_collected/
+
+# Virtual Environment
+.env
+venv/
+env/
+
+# IDE-specific files (e.g., PyCharm)
+.idea/
+*.iml
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Testing and Coverage
+.coverage
+.tox/
+.eggs/
+
+# Dependency Management (if not using Pipfile.lock/poetry.lock in version control)
+# Pipfile.lock
+# poetry.lock
+
+# Other files
+*.swp
+*.bak
