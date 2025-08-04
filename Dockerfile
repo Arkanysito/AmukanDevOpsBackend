@@ -2,9 +2,13 @@
 FROM python:3.13-slim
 
 # Instala GDAL y dependencias del sistema
-RUN apt-get update && \
-    apt-get install -y gdal-bin libgdal-dev binutils && \
-    apt-get clean
+RUN apt-get update && apt-get install -y \
+    gdal-bin libgdal-dev \
+    libgeos-dev libproj-dev \
+    libspatialindex-dev \
+    binutils \
+    libpq-dev \
+    && apt-get clean
 
 # Variables necesarias para compilar los bindings
 ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
