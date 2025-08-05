@@ -10,6 +10,9 @@ class TravelerType(models.Model):
     is_active = models.BooleanField(default=True)
     recommendation_model_version = models.IntegerField()
 
+    def __str__(self):
+        return f"{self.name}"
+
 class User(models.Model):
     user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     traveler_type_id = models.ForeignKey(
@@ -27,10 +30,16 @@ class User(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     recommendation_model_version = models.IntegerField(null=True, blank=True)
 
+    def __str__(self):
+        return f"{self.username} - {self.created_at.strftime('%d/%m/%Y')}"
+
 
 class Interest(models.Model):
     interest_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"{self.name}"
 
 class UserInterest(models.Model):
     user_id = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -40,6 +49,9 @@ class UserInterest(models.Model):
     class Meta:
         unique_together = ('user_id', 'interest_id')
 
+    def __str__(self):
+        return f"{self.user_id.username} - {self.interest_id.name}"
+
 class UserTravelerTypeHistory(models.Model):
     history_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user_id = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -47,5 +59,8 @@ class UserTravelerTypeHistory(models.Model):
     assigned_at = models.DateTimeField(auto_now_add=True)
     recommendation_model_score = models.DecimalField(max_digits=5, decimal_places=4)
     recommendation_model_version = models.IntegerField()
+
+    def __str__(self):
+        return f"{self.user_id.username} - {self.traveler_type_id.name}"
 
 

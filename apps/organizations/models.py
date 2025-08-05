@@ -19,6 +19,9 @@ class Organization(models.Model):
     contact_info = models.JSONField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return f"{self.name}"
+
 class OrganizationUser(models.Model):
     organization_id = models.ForeignKey(Organization, on_delete=models.CASCADE)
     user_id = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -26,3 +29,6 @@ class OrganizationUser(models.Model):
 
     class Meta:
         unique_together = ('organization_id', 'user_id')
+
+    def __str__(self):
+        return f"{self.user_id.username} - {self.organization_id.name} - {self.role}"

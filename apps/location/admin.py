@@ -4,6 +4,8 @@ from django.contrib.gis.forms.widgets import OSMWidget
 from .models import Zone, Place
 
 class CustomGeoAdmin(GISModelAdmin):
+    list_display = ('name',)
+
     def formfield_for_dbfield(self, db_field, request, **kwargs):
         field = super().formfield_for_dbfield(db_field, request, **kwargs)
         if hasattr(field.widget, 'map_srid'):

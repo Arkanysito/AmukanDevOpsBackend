@@ -60,15 +60,6 @@ class InteractionAction(models.TextChoices):
     LIKE = 'LIKE', 'Like'
     COMMENT = 'COMMENT', 'Comment'
 
-class ObjectType(models.TextChoices):
-    EVENT = 'EVENT', 'Event'
-    SERVICE = 'SERVICE', 'Service'
-    PLACE = 'PLACE', 'Place'
-    ORGANIZATION = 'ORGANIZATION', 'Organization'
-    USER = 'USER', 'User'
-    TRAVELER_TYPE = 'TRAVELER_TYPE', 'Traveler Type'
-    INTEREST = 'INTEREST', 'Interest'
-
 class SubscriptionPlan(models.TextChoices):
     FREE = 'FREE', 'Free'
     BASIC = 'BASIC', 'Basic'
@@ -131,3 +122,26 @@ class ImagePosition(models.TextChoices):
     MAP_MARKER = 'MAP_MARKER', 'Marcador de mapa'
     AVATAR = 'AVATAR', 'Avatar'
     DETAIL = 'DETAIL', 'Detalle'
+
+class TransportType(models.TextChoices):
+    BUS = 'BUS', 'Bus'
+    TRAIN = 'TRAIN', 'Tren'
+    CAR = 'CAR', 'Auto'
+    BIKE = 'BIKE', 'Bicicleta'
+    PLANE = 'PLANE', 'Avión'
+    BOAT = 'BOAT', 'Barco'
+
+class AccommodationType(models.TextChoices):
+    HOTEL = 'HOTEL', 'Hotel'
+    HOSTEL = 'HOSTEL', 'Hostal'
+    AIRBNB = 'AIRBNB', 'Airbnb'
+    CAMPING = 'CAMPING', 'Camping'
+    GUESTHOUSE = 'GUESTHOUSE', 'Casa de huéspedes'
+
+class ActivityType(models.TextChoices):
+    HIKING = 'HIKING', 'Senderismo'
+    MUSEUM = 'MUSEUM', 'Museo'
+    BEACH = 'BEACH', 'Playa'
+    SKIING = 'SKIING', 'Esquí'
+    SHOPPING = 'SHOPPING', 'Compras'
+    CLIMBING = 'CLIMBING', 'Escalada'

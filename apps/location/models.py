@@ -11,7 +11,10 @@ class Zone(models.Model):
         max_length=20,
         choices=ZoneLevel.choices
     )
-    coordinates = models.PointField(geography=True)
+    coordinates = models.PolygonField(geography=True)
+
+    def __str__(self):
+        return f"{self.name} - {self.level}"
 
 
 class Place(models.Model):
@@ -20,11 +23,17 @@ class Place(models.Model):
     zone_id = models.ForeignKey(Zone, on_delete=models.SET_NULL, null=True, blank=True)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
-    address = models.TextField()
+    address = models.TextField(blank=True, null=True)
     type = models.CharField(
         max_length=20,
         choices=PlaceType.choices,
     )
     coordinates = models.PointField(geography=True)
     accessibility_features = models.JSONField(blank=True, null=True)
+
+    def __str__(self):
+        if self.zone_id:
+            return f"{self.name}, Zone: {self.zone_id.name}"
+        return f"{self.name}, Zone: Unknown"
+
     
