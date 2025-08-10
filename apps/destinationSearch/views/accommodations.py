@@ -1,22 +1,18 @@
 from rest_framework.views import APIView
-from rest_framework.response import Response
 from apps.experiences.models import AccommodationService
-from ..serializers import AccommodationServiceSerializer
+from apps.destinationSearch.serializers import AccommodationServiceSerializer
+from .common import standard_response
 
 class AccommodationListView(APIView):
     def get(self, request):
-        destination = request.GET.get('destination')
-        travelers = request.GET.get('travelers')
-        budget = request.GET.get('budget')
+        params = request.query_params
+        budget = params.get("budget")
+        travelers = params.get("travelers")
 
-        queryset = AccommodationService.objects.all()
-
-        if destination:
-            queryset = queryset.filter(place_id__name__icontains=destination)
-        if travelers:
-            queryset = queryset.filter(room_capacity__gte=int(travelers))
+        querys = AccommodationService.objects.all()
         if budget:
-            queryset = queryset.filter(price__lte=float(budget))
+            querys = querys.filter(price__lte=budget)
+        if travelers:
+            querys = querys.filter(room_capacity__gte=travelers)
 
-        serializer = AccommodationServiceSerializer(queryset, many=True)
-        return Response(serializer.data)
+        return standard_response(querys, AccommodationServiceSerializer, "alojamientos")
