@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import TravelerType, User, Interest, UserInterest, UserTravelerTypeHistory
+from .models import TravelerType, CustomUser, Interest, UserInterest, UserTravelerTypeHistory
 
 class UserAdmin(admin.ModelAdmin):
     list_display = ('username', 'email', 'traveler_type_name')
@@ -27,7 +27,7 @@ class UserInterestAdmin(admin.ModelAdmin):
 
 
 admin.site.register(TravelerType, TravelerTypeAdmin)
-admin.site.register(User, UserAdmin)
+admin.site.register(CustomUser, UserAdmin)
 admin.site.register(Interest, InterestAdmin)
 admin.site.register(UserInterest, UserInterestAdmin)
 admin.site.register(UserTravelerTypeHistory)

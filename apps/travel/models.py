@@ -2,7 +2,7 @@ import uuid
 from django.db import models
 from apps.booking.models import Reservation
 from apps.core.constants import Currency, UserRole
-from apps.users.models import Interest, User
+from apps.users.models import Interest, CustomUser
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 
@@ -32,7 +32,7 @@ class ItineraryItem(models.Model):
 
 
 class ItineraryCollaborator(models.Model):
-    user_id = models.ForeignKey(User, on_delete=models.CASCADE)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     itinerary_id = models.ForeignKey(Itinerary, on_delete=models.CASCADE)
     role = models.CharField(
         max_length=20,

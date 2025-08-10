@@ -1,13 +1,13 @@
 from django.db import models
 import uuid
-from apps.users.models import User
+from apps.users.models import CustomUser
 from apps.core.constants import InteractionAction
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 
 class Interaction(models.Model):
     interaction_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user_id = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True)
     session_id = models.CharField(max_length=255)
 
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)

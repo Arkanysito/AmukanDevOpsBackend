@@ -1,5 +1,6 @@
 from django.db import models
 import uuid
+from django.contrib.auth.models import AbstractUser
 from apps.core.constants import Currency, Language, Nationality, Gender
 
 class TravelerType(models.Model):
@@ -12,27 +13,25 @@ class TravelerType(models.Model):
 
     def __str__(self):
         return f"{self.name}"
+    
 
-class User(models.Model):
+class CustomUser(AbstractUser):
     user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     traveler_type_id = models.ForeignKey(
         TravelerType,
         null=True, blank=True,
         on_delete=models.SET_NULL
     )
-    email = models.EmailField(max_length=255, unique=True)
-    password = models.CharField(max_length=255)
-    username = models.CharField(max_length=100)
     gender = models.CharField(max_length=1, choices=Gender.choices, default=Gender.UNSPECIFIED)
     nationality = models.CharField(max_length=2, choices=Nationality.choices)
     language = models.CharField(max_length=2, choices=Language.choices)
     currency = models.CharField(max_length=3, choices=Currency.choices)
-    created_at = models.DateTimeField(auto_now_add=True)
     recommendation_model_version = models.IntegerField(null=True, blank=True)
 
-    def __str__(self):
-        return f"{self.username} - {self.created_at.strftime('%d/%m/%Y')}"
+    email = models.EmailField(unique=True)
 
+    def __str__(self):
+        return self.username or self.email
 
 class Interest(models.Model):
     interest_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -42,7 +41,7 @@ class Interest(models.Model):
         return f"{self.name}"
 
 class UserInterest(models.Model):
-    user_id = models.ForeignKey(User, on_delete=models.CASCADE)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     interest_id = models.ForeignKey(Interest, on_delete=models.CASCADE)
     weight = models.DecimalField(max_digits=3, decimal_places=2)
 
@@ -54,7 +53,7 @@ class UserInterest(models.Model):
 
 class UserTravelerTypeHistory(models.Model):
     history_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user_id = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True)
     traveler_type_id = models.ForeignKey(TravelerType, on_delete=models.SET_NULL, null=True)
     assigned_at = models.DateTimeField(auto_now_add=True)
     recommendation_model_score = models.DecimalField(max_digits=5, decimal_places=4)

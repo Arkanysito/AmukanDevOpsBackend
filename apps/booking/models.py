@@ -2,12 +2,12 @@ from django.db import models
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
 import uuid
-from apps.users.models import User
+from apps.users.models import CustomUser
 from apps.core.constants import Currency, ReservationStatus
 
 class Reservation(models.Model):
     reservation_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user_id = models.ForeignKey(User, on_delete=models.CASCADE)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.UUIDField()
     reservable = GenericForeignKey('content_type', 'object_id')
