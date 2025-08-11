@@ -51,6 +51,8 @@ INSTALLED_APPS = [
     'apps.travel',
     'apps.content',
     'apps.tracking',
+    'apps.destinationSearch',
+    'rest_framework',
     
 ]
 
