@@ -1,6 +1,6 @@
 from django.db import models
 import uuid
-from apps.users.models import User
+from apps.users.models import CustomUser
 from apps.core.constants import OrganizationUserRole, SubscriptionPlan, OrganizationCategory
 
 class Organization(models.Model):
@@ -24,7 +24,7 @@ class Organization(models.Model):
 
 class OrganizationUser(models.Model):
     organization_id = models.ForeignKey(Organization, on_delete=models.CASCADE)
-    user_id = models.ForeignKey(User, on_delete=models.CASCADE)
+    user_id = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     role = models.CharField(max_length=50, choices=OrganizationUserRole.choices)
 
     class Meta:
