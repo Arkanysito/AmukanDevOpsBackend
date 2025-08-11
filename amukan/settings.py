@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'apps.tracking',
     'apps.destinationSearch',
     'rest_framework',
+    'corsheaders',
     
 ]
 
@@ -64,6 +65,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
+
 ]
 
 ROOT_URLCONF = 'amukan.urls'
@@ -148,4 +151,8 @@ AUTH_USER_MODEL = 'users.CustomUser'
 AUTHENTICATION_BACKENDS = [
     'apps.users.auth.UsernameOrEmailBackend',
     'django.contrib.auth.backends.ModelBackend',
+]
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
 ]
