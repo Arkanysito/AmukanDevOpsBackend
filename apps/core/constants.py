@@ -58,7 +58,8 @@ class InteractionAction(models.TextChoices):
     BOOK = 'BOOK', 'Book'
     SHARE = 'SHARE', 'Share'
     LIKE = 'LIKE', 'Like'
-    COMMENT = 'COMMENT', 'Comment'
+    COMMENT = 'COMMENT', 'Comment',
+    SEARCH = 'SEARCH', 'Search'
 
 class SubscriptionPlan(models.TextChoices):
     FREE = 'FREE', 'Free'
