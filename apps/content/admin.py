@@ -8,7 +8,7 @@ class ObjectTagAdmin(admin.ModelAdmin):
     list_display = ('tag_name', 'object_content_type')
 
     def tag_name(self, obj):
-        return obj.tag_id.tag
+        return obj.tag_id.name
     tag_name.short_description = 'Tag'
 
     def object_content_type(self, obj):
