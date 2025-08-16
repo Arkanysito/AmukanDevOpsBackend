@@ -16,16 +16,16 @@ class TravelerType(models.Model):
     
 
 class CustomUser(AbstractUser):
-    user_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     traveler_type_id = models.ForeignKey(
         TravelerType,
         null=True, blank=True,
         on_delete=models.SET_NULL
     )
-    gender = models.CharField(max_length=1, choices=Gender.choices, default=Gender.UNSPECIFIED)
-    nationality = models.CharField(max_length=2, choices=Nationality.choices)
-    language = models.CharField(max_length=2, choices=Language.choices)
-    currency = models.CharField(max_length=3, choices=Currency.choices)
+    gender = models.CharField(max_length=1, choices=Gender.choices, default=Gender.UNSPECIFIED, null=True, blank=True,)
+    nationality = models.CharField(max_length=2, choices=Nationality.choices, default=Nationality.CL, null=True, blank=True,)
+    language = models.CharField(max_length=2, choices=Language.choices, default=Language.ES, null=True, blank=True,)
+    currency = models.CharField(max_length=3, choices=Currency.choices, default=Currency.CLP, null=True, blank=True,)
     recommendation_model_version = models.IntegerField(null=True, blank=True)
 
     email = models.EmailField(unique=True)

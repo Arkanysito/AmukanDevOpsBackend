@@ -5,7 +5,7 @@ class ReservationAdmin(admin.ModelAdmin):
     list_display = ('user_username', 'object_content_type')
 
     def user_username(self, obj):
-        return obj.user_id.username
+        return obj.id.username
     user_username.short_description = 'User'
 
     def object_content_type(self, obj):
