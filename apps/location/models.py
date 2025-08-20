@@ -30,6 +30,8 @@ class Place(models.Model):
     )
     coordinates = models.PointField(geography=True)
     accessibility_features = models.JSONField(blank=True, null=True)
+    average_price = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True)
+    schedule = models.JSONField(blank=True, null=True)
 
     def __str__(self):
         if self.zone_id:

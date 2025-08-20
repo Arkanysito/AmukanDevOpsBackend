@@ -34,6 +34,7 @@ class AccommodationService(AbstractService):
     room_capacity = models.IntegerField()
     check_in_time = models.TimeField()
     check_out_time = models.TimeField()
+    parking = models.BooleanField(default=False)
     
 class ActivityService(AbstractService):
     activity_type = models.CharField(max_length=15, choices=ActivityType.choices)

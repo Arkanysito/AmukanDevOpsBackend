@@ -23,5 +23,6 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/destination/', include('apps.destinationSearch.urls')),
     path('api/user/', include('apps.users.urls')),
+    path('api/travel/', include('apps.travel.urls')),
     path('api-auth/', include("rest_framework.urls")),
 ]
