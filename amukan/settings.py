@@ -57,15 +57,21 @@ INSTALLED_APPS = [
     
 ]
 
+MB_EMBEDDING_APP_SECRET = os.getenv("MB_EMBEDDING_APP_SECRET")
+METABASE_SITE_URL = os.getenv("METABASE_SITE_URL", "http://localhost:3000")
+
+DEBUG = os.getenv("DEBUG", "True") == "True"
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 
 ]
 
@@ -156,3 +162,8 @@ AUTHENTICATION_BACKENDS = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]
+
+#Agregado para Metabase
+
+CORS_ALLOW_CREDENTIALS = True
+CSRF_TRUSTED_ORIGINS = ["http://localhost:5173"]

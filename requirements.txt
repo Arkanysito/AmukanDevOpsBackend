@@ -7,3 +7,4 @@ python-dotenv
 gunicorn
 djangorestframework
 django-cors-headers
+PyJWT==2.9.0
