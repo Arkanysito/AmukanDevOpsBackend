@@ -14,6 +14,7 @@ class AbstractService(models.Model):
     price_currency = models.CharField(max_length=3, choices=Currency.choices)
     details = models.JSONField(blank=True, null=True)
     policies = models.JSONField(blank=True, null=True)
+    rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     class Meta:
         abstract = True
@@ -34,6 +35,7 @@ class AccommodationService(AbstractService):
     room_capacity = models.IntegerField()
     check_in_time = models.TimeField()
     check_out_time = models.TimeField()
+    parking = models.BooleanField(default=False)
     
 class ActivityService(AbstractService):
     activity_type = models.CharField(max_length=15, choices=ActivityType.choices)
@@ -53,6 +55,7 @@ class Event(models.Model):
     price_currency = models.CharField(max_length=3, choices=Currency.choices)
     details = models.JSONField(blank=True, null=True)
     is_featured = models.BooleanField(default=False)
+    rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
