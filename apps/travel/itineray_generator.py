@@ -9,8 +9,8 @@ from apps.core.constants import InteractionAction
 import uuid
 from collections import namedtuple
 
-def itinnerary_preview(request, destino, desde, hasta, presupuesto, cantidad_personas):
-    Item = namedtuple("Item", ["objeto", "fecha", "costo", "tipo"])
+def itinerary_preview(request, destino, desde, hasta, presupuesto, cantidad_personas):
+    Item = namedtuple("Item", ["objeto", "fecha", "costo", "tipo", "rating"])
 
     dias = (hasta - desde).days
     if dias <= 0:
@@ -46,17 +46,17 @@ def itinnerary_preview(request, destino, desde, hasta, presupuesto, cantidad_per
         items = []
         total_gasto = 0
 
-        def agregar(objeto, fecha, costo, tipo):
+        def agregar(objeto, fecha, costo, tipo, rating):
             nonlocal total_gasto
             if total_gasto + costo > presupuesto:
                 return False
-            items.append(Item(objeto=objeto, fecha=fecha, costo=costo, tipo=tipo))
+            items.append(Item(objeto=objeto, fecha=fecha, costo=costo, tipo=tipo, rating=rating))
             total_gasto += costo
             return True
 
         # Alojamientos
         costo_alojamiento = alojamiento.price * (dias - 1) #dias - 1 = noches
-        if not agregar(alojamiento, desde, costo_alojamiento, "hospedaje"):
+        if not agregar(alojamiento, desde, costo_alojamiento, "hospedaje", alojamiento.rating):
             continue  # si no entra en presupuesto, saltar este itinerario
 
         # Comidas (mínimo una diaria)
@@ -69,19 +69,19 @@ def itinnerary_preview(request, destino, desde, hasta, presupuesto, cantidad_per
             restaurante = restaurantes[comidas_agregadas % len(restaurantes)]
             costo = restaurante.average_price * cantidad_personas
             fecha_comida = desde + timedelta(days=dia)
-            if agregar(restaurante, fecha_comida, costo, "comida"):
+            if agregar(restaurante, fecha_comida, costo, "comida", restaurante.rating):
                 comidas_agregadas += 1
 
         # Actividades
         for actividad in actividades:
             fecha = getattr(actividad, "start_date", desde)
             costo = actividad.price * cantidad_personas
-            agregar(actividad, fecha, costo, "actividades")
+            agregar(actividad, fecha, costo, "actividades", actividad.rating)
 
         # Eventos
         for evento in eventos:
             costo = evento.price * cantidad_personas
-            agregar(evento, evento.start_date, costo, "eventos")
+            agregar(evento, evento.start_date, costo, "eventos", evento.rating)
 
         itinerarios.append({
             "items": items,

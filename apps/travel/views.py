@@ -2,7 +2,7 @@ from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from apps.travel.itineray_generator import itinnerary_preview
+from apps.travel.itineray_generator import itinerary_preview
 
 class ItineraryPreviewView(APIView):
     def post(self, request):
@@ -26,7 +26,7 @@ class ItineraryPreviewView(APIView):
         except ValueError:
             return Response({"error": "Formato de fecha inválido"}, status=status.HTTP_400_BAD_REQUEST)
 
-        itinerarios = itinnerary_preview(request, destino, desde, hasta, presupuesto, cantidad_personas)
+        itinerarios = itinerary_preview(request, destino, desde, hasta, presupuesto, cantidad_personas)
 
         if not itinerarios:
             return Response({"message": "No se pudo generar un itinerario con los parámetros dados"}, status=status.HTTP_204_NO_CONTENT)
@@ -53,7 +53,7 @@ class ItineraryPreviewView(APIView):
                 servicio = {
                     "nombre": getattr(objeto, "name", getattr(objeto, "title", "Sin nombre")),
                     "descripcion": getattr(objeto, "descripcion", ""),
-                    "rating": 5,
+                    "rating": item.rating,
                     "fecha": item.fecha.isoformat() if item.fecha else None,
                     "costo": item.costo,
                     "coordenadas": get_coordinates(objeto)
