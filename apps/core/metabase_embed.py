@@ -1,7 +1,8 @@
+'''
 import time, jwt
 from django.conf import settings
 
-'''
+
 def signed_embed(resource: dict, params: dict, ttl_secs: int = 600) -> str:
     """
     resource: {"dashboard": <id>}  o  {"question": <id>}

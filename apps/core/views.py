@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from .constants import Gender, Nationality
 from django.http import JsonResponse, HttpResponseForbidden
 from django.views.decorators.http import require_GET
-from .metabase_embed import signed_embed_url
+#from .metabase_embed import signed_embed_url
 
 class ChoicesView(APIView):
     def get(self, request):
@@ -12,7 +12,7 @@ class ChoicesView(APIView):
             "gender": [{"value": choice.value, "label": choice.label} for choice in Gender],
             "nationality": [{"value": choice.value, "label": choice.label} for choice in Nationality],
         })
-
+'''
 @require_GET
 def metabase_embed_url(request):
     # obtén org_id del usuario autenticado o por querystring 'org'
@@ -28,3 +28,4 @@ def metabase_embed_url(request):
 
     url = signed_embed_url(resource={kind: mb_id}, params={"organization_id": str(org_id)})
     return JsonResponse({"url": url})
+'''
