@@ -14,6 +14,7 @@ class AbstractService(models.Model):
     price_currency = models.CharField(max_length=3, choices=Currency.choices)
     details = models.JSONField(blank=True, null=True)
     policies = models.JSONField(blank=True, null=True)
+    rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     class Meta:
         abstract = True
@@ -54,6 +55,7 @@ class Event(models.Model):
     price_currency = models.CharField(max_length=3, choices=Currency.choices)
     details = models.JSONField(blank=True, null=True)
     is_featured = models.BooleanField(default=False)
+    rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
