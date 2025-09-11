@@ -9,3 +9,6 @@ djangorestframework
 django-cors-headers
 djangorestframework-simplejwt
 PyJWT==2.9.0
+osmnx 
+geopandas 
+shapely

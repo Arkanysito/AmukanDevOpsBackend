@@ -11,7 +11,7 @@ class Zone(models.Model):
         max_length=20,
         choices=ZoneLevel.choices
     )
-    coordinates = models.PolygonField(geography=True)
+    coordinates = models.MultiPolygonField(geography=True)
 
     def __str__(self):
         return f"{self.name} - {self.level}"
