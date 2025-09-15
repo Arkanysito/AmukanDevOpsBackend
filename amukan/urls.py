@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path, include
 from apps.core.views import ChoicesView
 from apps.core.views import get_org_dashboard_embed_url
+from apps.recommendation.views import recommend_places_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -26,5 +27,5 @@ urlpatterns = [
     path('api/travel/', include('apps.travel.urls')),
     path('api-auth/', include("rest_framework.urls")),
     path("api/metabase/org-dashboard", get_org_dashboard_embed_url),
-    
+    path("api/recommendations/", recommend_places_view, name="recommend_places")
 ]

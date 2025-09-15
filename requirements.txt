@@ -9,3 +9,9 @@ djangorestframework
 django-cors-headers
 djangorestframework-simplejwt
 PyJWT==2.9.0
+osmnx 
+geopandas 
+shapely
+pgvector==0.4.1
+sentence-transformers
+scikit-learn
