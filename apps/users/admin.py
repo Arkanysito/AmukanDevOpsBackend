@@ -15,15 +15,15 @@ class InterestAdmin(admin.ModelAdmin):
     list_display = ('name',)
 
 class UserInterestAdmin(admin.ModelAdmin):
-    list_display = ('user_username', 'intereset_name', 'weight')
+    list_display = ('user_username', 'interest_name', 'weight')
     
     def user_username(self, obj):
         return obj.user_id.username
     user_username.short_description = 'User'
 
-    def intereset_name(self, obj):
-        return obj.content_type.model
-    intereset_name.short_description = "Interest"
+    def interest_name(self, obj):
+        return obj.interest_id.name
+    interest_name.short_description = "Interest"
 
 
 admin.site.register(TravelerType, TravelerTypeAdmin)
