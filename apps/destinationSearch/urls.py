@@ -4,6 +4,7 @@ from .views.activities import ActivityListView
 from .views.events import EventListView
 from .views.search import SearchAllView
 from .views.transports import TransportListView
+from .views.places import PlaceListView
 
 urlpatterns = [
     path('accommodations/', AccommodationListView.as_view()),
@@ -11,4 +12,5 @@ urlpatterns = [
     path('events/', EventListView.as_view()),
     path('transports/', TransportListView.as_view()),
     path('search/', SearchAllView.as_view()),
+    path('places/', PlaceListView.as_view())
 ]

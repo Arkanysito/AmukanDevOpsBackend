@@ -16,10 +16,15 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-
+from apps.core.views import ChoicesView
+from apps.core.views import get_org_dashboard_embed_url
 
 urlpatterns = [
-    
     path('admin/', admin.site.urls),
     path('api/destination/', include('apps.destinationSearch.urls')),
+    path('api/user/', include('apps.users.urls')),
+    path('api/travel/', include('apps.travel.urls')),
+    path('api-auth/', include("rest_framework.urls")),
+    path("api/metabase/org-dashboard", get_org_dashboard_embed_url),
+    
 ]

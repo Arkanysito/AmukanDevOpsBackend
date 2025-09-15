@@ -17,6 +17,8 @@ services:
       POSTGRES_PORT: ${POSTGRES_PORT}
       SECRET_KEY: ${SECRET_KEY}
       GDAL_LIBRARY_PATH: ${GDAL_LIBRARY_PATH}
+      MB_EMBEDDING_APP_SECRET: ${MB_EMBEDDING_APP_SECRET}
+      METABASE_SITE_URL: ${METABASE_SITE_URL}
 
   db:
     image: postgis/postgis:latest
@@ -34,6 +36,21 @@ services:
       timeout: 5s
       retries: 5
 
+  metabase:
+    image: metabase/metabase:latest
+    ports:
+      - "3000:3000"
+    environment:
+      MB_SITE_URL: ${METABASE_SITE_URL}
+      MB_LOCALE: "es"
+      MB_DB_FILE: "/metabase-data/metabase.db"
+      MB_EMBEDDING_APP_SECRET: ${MB_EMBEDDING_APP_SECRET}
+    volumes:
+      - metabase_data:/metabase-data
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   postgres_data:
-
+  metabase_data:
