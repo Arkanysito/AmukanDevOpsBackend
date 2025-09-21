@@ -51,8 +51,9 @@ class ItineraryPreviewView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
     
     def _format_itineraries_for_frontend(self, itinerarios, destino, desde, hasta, cantidad_personas):
-        """Formatea los itinerarios para que coincidan con lo que espera el frontend"""
+        """Formatea los itinerarios agregando número de día a cada servicio"""
         formatted_itineraries = []
+        dias_totales = max(1, (hasta - desde).days)
         
         for idx, itinerario in enumerate(itinerarios):
             servicios = {
@@ -66,20 +67,23 @@ class ItineraryPreviewView(APIView):
             for item in itinerario["items"]:
                 servicio_formateado = self._format_service_item(item)
                 
+                # Agregar número de día al servicio
+                dia_numero = self._obtener_numero_dia(item, desde)
+                servicio_formateado["dia"] = dia_numero
+                
                 # Mapear tipos al formato que espera el frontend
                 tipo_frontend = self._map_service_type_to_frontend(item['type'])
                 if tipo_frontend:
                     servicios[tipo_frontend].append(servicio_formateado)
 
-            dias_totales = (hasta - desde).days
-            if dias_totales == 0:  # Same-day
+            # Calcular duración
+            if dias_totales == 1:
                 duracion = "1 día"
-                noches = 0
             else:
-                noches = dias_totales - 1
-                duracion = f"{dias_totales} días / {noches} noches"
+                duracion = f"{dias_totales} días / {dias_totales - 1} noches"
 
             formatted_itineraries.append({
+                "id": idx + 1,
                 "titulo": f"Itinerario {idx+1} para {destino} ({itinerario.get('strategy', 'standard')})",
                 "duracion": duracion,
                 "cantidad_personas": cantidad_personas,
@@ -89,6 +93,19 @@ class ItineraryPreviewView(APIView):
             })
         
         return formatted_itineraries
+    
+    def _obtener_numero_dia(self, item, start_date):
+        """Obtiene el número de día basado en la fecha del item"""
+        item_date = item.get('date')
+        if not item_date:
+            return 1  # Default al primer día
+        
+        if isinstance(item_date, str):
+            item_date = datetime.fromisoformat(item_date.replace('Z', '+00:00'))
+        
+        # Calcular diferencia de días
+        diferencia = (item_date.date() - start_date.date()).days
+        return max(1, diferencia + 1)
     
     def _map_service_type_to_frontend(self, backend_type):
         """Mapea los tipos del backend a los que espera el frontend"""
