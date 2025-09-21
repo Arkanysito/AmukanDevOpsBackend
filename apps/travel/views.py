@@ -70,10 +70,18 @@ class ItineraryPreviewView(APIView):
                 tipo_frontend = self._map_service_type_to_frontend(item['type'])
                 if tipo_frontend:
                     servicios[tipo_frontend].append(servicio_formateado)
-            
+
+            dias_totales = (hasta - desde).days
+            if dias_totales == 0:  # Same-day
+                duracion = "1 día"
+                noches = 0
+            else:
+                noches = dias_totales - 1
+                duracion = f"{dias_totales} días / {noches} noches"
+
             formatted_itineraries.append({
                 "titulo": f"Itinerario {idx+1} para {destino} ({itinerario.get('strategy', 'standard')})",
-                "duracion": f"{(hasta - desde).days} días / {(hasta - desde).days - 1} noches",
+                "duracion": duracion,
                 "cantidad_personas": cantidad_personas,
                 "presupuesto": float(itinerario["total_cost"]),
                 "utilizacion_presupuesto": float(itinerario.get("budget_utilization", 0)),

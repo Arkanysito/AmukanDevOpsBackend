@@ -19,9 +19,14 @@ class ItineraryOptimizer:
         self.budget = budget
         self.travelers = travelers
         self.preferences = preferences or {}
-        self.days = (self.end_date - self.start_date).days
+
+        # Detectar si es same-day (mismo día)
+        self.is_same_day = self.start_date.date() == self.end_date.date()
+        self.current_time = timezone.now() if self.is_same_day else None
+        
+        self.days = max(1, (self.end_date - self.start_date).days)  # Mínimo 1 día
         self.zone = self._get_zone()
-        self.time_slots_per_day = 4
+        self.time_slots_per_day = 4 
         
     def _get_zone(self):
         """Busca la zona del destino"""
@@ -115,8 +120,15 @@ class ItineraryOptimizer:
                 event_start = self._ensure_timezone_aware(event.start_date)
                 event_end = self._ensure_timezone_aware(event.end_date)
                 
-                # Criterio más flexible: evento debe ocurrir DURANTE el viaje
-                # (puede empezar antes o terminar después, pero debe haber solapamiento)
+                # Para same-day: filtrar eventos que ya terminaron
+                if self.is_same_day and self.current_time:
+                    if event_end < self.current_time:
+                        continue  # Saltar eventos que ya terminaron
+                    # Para eventos en curso, ajustar el inicio al tiempo actual
+                    if event_start < self.current_time < event_end:
+                        event_start = self.current_time
+                
+                # Criterio flexible de solapamiento
                 if self._hay_solapamiento(event_start, event_end, self.start_date, self.end_date):
                     filtered_events.append(event)
             
@@ -128,6 +140,11 @@ class ItineraryOptimizer:
             events = Event.objects.filter(
                 Q(start_date__lte=self.end_date) & Q(end_date__gte=self.start_date)
             )
+            
+            # Filtrar por hora actual si es same-day
+            if self.is_same_day and self.current_time:
+                events = events.filter(end_date__gte=self.current_time)
+            
             if self.zone:
                 events = events.filter(place_id__zone_id=self.zone)
             return list(events[:top_k])
@@ -190,24 +207,60 @@ class ItineraryOptimizer:
         """Crea ventanas de tiempo para cada día"""
         time_windows = []
         
-        for day in range(self.days):
-            day_date = self.start_date + timedelta(days=day)
-            day_date_date = day_date.date()
+        if self.is_same_day and self.current_time:
+            # Para same-day: crear ventanas desde la hora actual en adelante
+            current_time = self.current_time
+            current_hour = current_time.hour
             
-            windows = [
-                (timezone.make_aware(datetime.combine(day_date_date, time(9, 0))),
-                 timezone.make_aware(datetime.combine(day_date_date, time(12, 0)))),
+            # Definir ventanas restantes del día
+            day_date = current_time.date()
+            
+            # Mañana (si aún es temprano)
+            if current_hour < 12:
+                start_morning = max(current_time, timezone.make_aware(datetime.combine(day_date, time(9, 0))))
+                time_windows.append((start_morning, timezone.make_aware(datetime.combine(day_date, time(12, 0)))))
+            
+            # Almuerzo (12-14)
+            if current_hour < 14:
+                start_lunch = max(current_time, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
+                time_windows.append((start_lunch, timezone.make_aware(datetime.combine(day_date, time(14, 0)))))
+            
+            # Tarde (14-18)
+            if current_hour < 18:
+                start_afternoon = max(current_time, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
+                time_windows.append((start_afternoon, timezone.make_aware(datetime.combine(day_date, time(18, 0)))))
+            
+            # Noche (19-22)
+            if current_hour < 22:
+                start_evening = max(current_time, timezone.make_aware(datetime.combine(day_date, time(19, 0))))
+                time_windows.append((start_evening, timezone.make_aware(datetime.combine(day_date, time(22, 0)))))
+            
+            # Madrugada (22-24) - para eventos nocturnos
+            if current_hour < 24:
+                start_night = max(current_time, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
+                end_night = timezone.make_aware(datetime.combine(day_date + timedelta(days=1), time(2, 0)))  # Hasta las 2 AM
+                time_windows.append((start_night, end_night))
                 
-                (timezone.make_aware(datetime.combine(day_date_date, time(12, 0))),
-                 timezone.make_aware(datetime.combine(day_date_date, time(14, 0)))),
+        else:
+            # Para múltiples días: ventanas normales
+            for day in range(self.days):
+                day_date = self.start_date + timedelta(days=day)
+                day_date_date = day_date.date()
                 
-                (timezone.make_aware(datetime.combine(day_date_date, time(14, 0))),
-                 timezone.make_aware(datetime.combine(day_date_date, time(18, 0)))),
-                
-                (timezone.make_aware(datetime.combine(day_date_date, time(19, 0))),
-                 timezone.make_aware(datetime.combine(day_date_date, time(22, 0)))),
-            ]
-            time_windows.extend(windows)
+                windows = [
+                    (timezone.make_aware(datetime.combine(day_date_date, time(9, 0))),
+                    timezone.make_aware(datetime.combine(day_date_date, time(12, 0)))),
+                    
+                    (timezone.make_aware(datetime.combine(day_date_date, time(12, 0))),
+                    timezone.make_aware(datetime.combine(day_date_date, time(14, 0)))),
+                    
+                    (timezone.make_aware(datetime.combine(day_date_date, time(14, 0))),
+                    timezone.make_aware(datetime.combine(day_date_date, time(18, 0)))),
+                    
+                    (timezone.make_aware(datetime.combine(day_date_date, time(19, 0))),
+                    timezone.make_aware(datetime.combine(day_date_date, time(22, 0)))),
+                ]
+                time_windows.extend(windows)
         
         return time_windows
     
@@ -457,7 +510,10 @@ class ItineraryOptimizer:
         return max(inicio1, inicio2) < min(fin1, fin2)
     
     def _select_accommodation(self, strategy, accommodations):
-        """Selecciona alojamiento según la estrategia"""
+        """Selecciona alojamiento - para same-day, no incluir alojamiento"""
+        if self.is_same_day:
+            return None  # No alojamiento para same-day
+        
         if not accommodations:
             return None
         
@@ -465,8 +521,7 @@ class ItineraryOptimizer:
             return min(accommodations, key=lambda x: float(x.price))
         elif strategy == 'premium':
             return max(accommodations, key=lambda x: float(x.rating))
-        else:  # balanced
-            # Mejor relación calidad-precio
+        else:
             best_value = None
             best_ratio = -1
             
@@ -480,7 +535,7 @@ class ItineraryOptimizer:
             return best_value or accommodations[0]
     
     def _plan_meals(self, restaurants, strategy, meal_budget):
-        """Planifica comidas dentro del presupuesto"""
+        """Planifica comidas, ajustando para same-day según hora actual"""
         meals = []
         meal_costs = {
             'budget': {'breakfast': 5, 'lunch': 10, 'dinner': 15},
@@ -489,13 +544,28 @@ class ItineraryOptimizer:
         }
         
         costs = meal_costs[strategy]
-        total_meals = self.days * 3  # 3 comidas por día
+        current_hour = self.current_time.hour if self.is_same_day and self.current_time else None
         
         if not restaurants:
-            # Comidas genéricas
+            # Comidas genéricas - ajustar para same-day
             for day in range(self.days):
                 day_date = self.start_date + timedelta(days=day)
-                for meal_type in ['breakfast', 'lunch', 'dinner']:
+                
+                # Para same-day, solo incluir comidas futuras
+                meal_types = []
+                if not self.is_same_day or current_hour is None:
+                    meal_types = ['breakfast', 'lunch', 'dinner']
+                else:
+                    if current_hour < 11:  # Antes de las 11AM: desayuno, almuerzo, cena
+                        meal_types = ['breakfast', 'lunch', 'dinner']
+                    elif current_hour < 15:  # 11AM-3PM: almuerzo, cena
+                        meal_types = ['lunch', 'dinner']
+                    elif current_hour < 19:  # 3PM-7PM: cena
+                        meal_types = ['dinner']
+                    else:  # Después de las 7PM: posible cena tardía o nada
+                        meal_types = ['dinner'] if current_hour < 21 else []
+                
+                for meal_type in meal_types:
                     cost = costs[meal_type] * self.travelers
                     meals.append({
                         'service': None,
@@ -507,11 +577,26 @@ class ItineraryOptimizer:
             return meals
         
         # Seleccionar restaurantes variados
-        selected_restaurants = random.sample(restaurants, min(len(restaurants), total_meals))
+        selected_restaurants = random.sample(restaurants, min(len(restaurants), self.days * 3))
         
         for day in range(self.days):
             day_date = self.start_date + timedelta(days=day)
-            for i, meal_type in enumerate(['breakfast', 'lunch', 'dinner']):
+            
+            # Determinar qué comidas incluir basado en la hora actual
+            meal_types_to_include = []
+            if not self.is_same_day or current_hour is None:
+                meal_types_to_include = ['breakfast', 'lunch', 'dinner']
+            else:
+                if current_hour < 11:
+                    meal_types_to_include = ['breakfast', 'lunch', 'dinner']
+                elif current_hour < 15:
+                    meal_types_to_include = ['lunch', 'dinner']
+                elif current_hour < 19:
+                    meal_types_to_include = ['dinner']
+                else:
+                    meal_types_to_include = ['dinner'] if current_hour < 21 else []
+            
+            for i, meal_type in enumerate(meal_types_to_include):
                 restaurant_idx = (day * 3 + i) % len(selected_restaurants)
                 restaurant = selected_restaurants[restaurant_idx]
                 
@@ -521,11 +606,18 @@ class ItineraryOptimizer:
                 else:
                     cost = costs[meal_type] * self.travelers
                 
+                # Para same-day, ajustar la hora de la comida
+                meal_time = day_date
+                if self.is_same_day and meal_type == 'lunch' and current_hour < 12:
+                    meal_time = meal_time.replace(hour=13, minute=0)  # Almuerzo a la 1PM
+                elif self.is_same_day and meal_type == 'dinner' and current_hour < 18:
+                    meal_time = meal_time.replace(hour=20, minute=0)  # Cena a las 8PM
+                
                 meals.append({
                     'service': restaurant,
                     'type': 'dining',
                     'cost': cost,
-                    'date': day_date,
+                    'date': meal_time,
                     'meal_type': meal_type
                 })
         
