@@ -18,5 +18,5 @@ class ObjectTag(models.Model):
     reservable = GenericForeignKey('content_type', 'object_id')
 
     def __str__(self):
-        return f"{self.tag_id.tag} - {self.content_type.model}"
+        return f"{self.tag_id.name} - {self.content_type.model}"
 
