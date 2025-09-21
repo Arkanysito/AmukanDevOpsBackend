@@ -103,7 +103,7 @@ class Command(BaseCommand):
             )
 
         # Poblar Event
-        for i in range(10):
+        for i in range(20):
             start = timezone.now() + timedelta(days=random.randint(1, 30))
             end = start + timedelta(hours=random.randint(2, 6))
             Event.objects.create(

@@ -1,3 +1,4 @@
+from django.utils import timezone
 from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,12 +20,19 @@ class ItineraryPreviewView(APIView):
             return Response({"error": "Faltan campos obligatorios"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            desde = datetime.fromisoformat(desde.replace('Z', '+00:00'))
-            hasta = datetime.fromisoformat(hasta.replace('Z', '+00:00'))
+            # Convertir strings a datetime
+            desde_dt = datetime.fromisoformat(desde.replace('Z', '+00:00'))
+            hasta_dt = datetime.fromisoformat(hasta.replace('Z', '+00:00'))
+            
+            # Hacer las fechas timezone-aware
+            desde = timezone.make_aware(desde_dt)
+            hasta = timezone.make_aware(hasta_dt)
+            
             presupuesto = float(presupuesto)
             cantidad_personas = int(cantidad_personas)
-        except (ValueError, TypeError):
-            return Response({"error": "Parámetros inválidos"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        except (ValueError, TypeError) as e:
+            return Response({"error": f"Parámetros inválidos: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Generar itinerarios optimizados
         itinerarios = generate_optimized_itineraries(
@@ -91,7 +99,7 @@ class ItineraryPreviewView(APIView):
         
         if service is None:
             # Servicio genérico (fallback)
-            return {
+            formatted_service = {
                 "nombre": item.get('description', 'Servicio'),
                 "descripcion": item.get('description', 'Servicio incluido en el itinerario'),
                 "rating": 0.0,
@@ -101,21 +109,29 @@ class ItineraryPreviewView(APIView):
                 "duracion": item.get('duration_hours'),
                 "tipo_comida": item.get('meal_type')
             }
+        else:
+            # Servicio de la base de datos
+            formatted_service = {
+                "id": str(getattr(service, 'service_id', getattr(service, 'place_id', getattr(service, 'event_id', '')))),
+                "nombre": getattr(service, 'name', 'Servicio'),
+                "descripcion": getattr(service, 'description', ''),
+                "rating": float(getattr(service, 'rating', 0.0)),
+                "fecha": item['date'].isoformat() if 'date' in item else None,
+                "costo": float(item['cost']),
+                "coordenadas": self._get_coordinates(service),
+                "duracion": item.get('duration_hours'),
+                "tipo_comida": item.get('meal_type')
+            }
         
-        # Servicio de la base de datos
-        formatted_service = {
-            "id": str(getattr(service, 'service_id', getattr(service, 'place_id', getattr(service, 'event_id', '')))),
-            "nombre": getattr(service, 'name', 'Servicio'),
-            "descripcion": getattr(service, 'description', ''),
-            "rating": float(getattr(service, 'rating', 0.0)),
-            "fecha": item['date'].isoformat() if 'date' in item else None,
-            "costo": float(item['cost']),
-            "coordenadas": self._get_coordinates(service),
-            "duracion": item.get('duration_hours'),
-            "tipo_comida": item.get('meal_type')
-        }
+        # Para eventos, agregar información específica
+        if item.get('type') == 'event' and hasattr(service, 'start_date'):
+            formatted_service.update({
+                "fecha_inicio": service.start_date.isoformat() if service.start_date else None,
+                "fecha_fin": service.end_date.isoformat() if service.end_date else None,
+                "es_evento": True
+            })
         
-        # Asegurarse de que las coordenadas estén en formato WKT si es un punto GIS
+        # Asegurarse de que las coordenadas estén en formato WKT
         if formatted_service["coordenadas"] and isinstance(formatted_service["coordenadas"], dict):
             point = formatted_service["coordenadas"]
             formatted_service["coordenadas"] = f"POINT({point['lng']} {point['lat']})"

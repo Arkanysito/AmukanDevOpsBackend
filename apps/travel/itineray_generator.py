@@ -1,7 +1,8 @@
 import random
 import numpy as np
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from django.db.models import Q
+from django.utils import timezone
 from collections import defaultdict
 import math
 from typing import List, Dict, Any, Tuple
@@ -13,14 +14,14 @@ class ItineraryOptimizer:
     def __init__(self, user, destination, start_date, end_date, budget, travelers, preferences=None):
         self.user = user
         self.destination = destination
-        self.start_date = start_date
-        self.end_date = end_date
+        self.start_date = self._ensure_timezone_aware(start_date)
+        self.end_date = self._ensure_timezone_aware(end_date)
         self.budget = budget
         self.travelers = travelers
         self.preferences = preferences or {}
-        self.days = (end_date - start_date).days
+        self.days = (self.end_date - self.start_date).days
         self.zone = self._get_zone()
-        self.time_slots_per_day = 4  # Mañana, almuerzo, tarde, noche
+        self.time_slots_per_day = 4
         
     def _get_zone(self):
         """Busca la zona del destino"""
@@ -28,6 +29,14 @@ class ItineraryOptimizer:
             Q(name__icontains=self.destination) |
             Q(place__name__icontains=self.destination)
         ).first()
+    
+    def _ensure_timezone_aware(self, dt):
+        """Asegura que un datetime sea timezone-aware usando Django"""
+        if dt is None:
+            return None
+        if not timezone.is_aware(dt):
+            return timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
     
     def _calculate_distance(self, coord1, coord2):
         """Calcula distancia haversine entre dos coordenadas (en km)"""
@@ -94,18 +103,112 @@ class ItineraryOptimizer:
                 restaurants = restaurants.filter(zone_id=self.zone)
             return list(restaurants[:top_k])
     
+    def _get_events(self, top_k=15):
+        """Obtiene eventos dentro del rango de fechas con horarios flexibles"""
+        try:
+            events = recommend_places(self.user, 'event', self.zone, top_k=top_k)
+            if events and isinstance(events[0], tuple):
+                events = [event for event, score in events]
+            
+            filtered_events = []
+            for event in events:
+                event_start = self._ensure_timezone_aware(event.start_date)
+                event_end = self._ensure_timezone_aware(event.end_date)
+                
+                # Criterio más flexible: evento debe ocurrir DURANTE el viaje
+                # (puede empezar antes o terminar después, pero debe haber solapamiento)
+                if self._hay_solapamiento(event_start, event_end, self.start_date, self.end_date):
+                    filtered_events.append(event)
+            
+            return filtered_events[:top_k]
+            
+        except Exception as e:
+            print(f"Error getting events: {e}")
+            # Fallback con criterio flexible
+            events = Event.objects.filter(
+                Q(start_date__lte=self.end_date) & Q(end_date__gte=self.start_date)
+            )
+            if self.zone:
+                events = events.filter(place_id__zone_id=self.zone)
+            return list(events[:top_k])
+    
+    def _process_events(self, events, time_windows, activities_budget):
+        """Procesa eventos y los integra en la planificación"""
+        scheduled_events = []
+        remaining_budget = activities_budget
+        
+        # No usamos used_windows para eventos porque tienen horarios fijos
+        sorted_events = sorted(events, key=lambda x: x.start_date)
+        
+        for event in sorted_events:
+            event_cost = float(event.price) * self.travelers
+            
+            if event_cost <= remaining_budget:
+                event_start = self._ensure_timezone_aware(event.start_date)
+                event_end = self._ensure_timezone_aware(event.end_date)
+                event_duration = (event_end - event_start).total_seconds() / 3600
+                
+                # Verificar si el evento ocurre durante el viaje (sin restricción de ventana)
+                if (event_start >= self.start_date and event_end <= self.end_date):
+                    scheduled_events.append({
+                        'service': event,
+                        'type': 'event',
+                        'cost': event_cost,
+                        'date': event_start,
+                        'start_time': event_start,
+                        'end_time': event_end,
+                        'duration_hours': event_duration,
+                        'es_fuera_de_horario': self._es_fuera_de_horario_normal(event_start, event_end)
+                    })
+                    remaining_budget -= event_cost
+        
+        return scheduled_events, remaining_budget, set()
+    
+    def _es_fuera_de_horario_normal(self, start_time, end_time):
+        """Determina si un evento está fuera del horario normal (9-22)"""
+        hora_inicio = start_time.hour
+        hora_fin = end_time.hour
+    
+        # Considerar eventos que empiezan antes de las 9am o terminan después de las 10pm
+        return hora_inicio < 9 or hora_fin > 22
+    
+    def _find_matching_time_window(self, event_start, event_end, time_windows, used_windows):
+        """Encuentra la ventana de tiempo que coincide con un evento"""
+        event_start = self._ensure_timezone_aware(event_start)
+        event_end = self._ensure_timezone_aware(event_end)
+        
+        for i, (window_start, window_end) in enumerate(time_windows):
+            if i not in used_windows:
+                window_start = self._ensure_timezone_aware(window_start)
+                window_end = self._ensure_timezone_aware(window_end)
+                
+                if (event_start >= window_start and event_end <= window_end):
+                    return i
+        return None
+    
     def _create_time_windows(self):
         """Crea ventanas de tiempo para cada día"""
         time_windows = []
+        
         for day in range(self.days):
             day_date = self.start_date + timedelta(days=day)
+            day_date_date = day_date.date()
+            
             windows = [
-                (day_date.replace(hour=9, minute=0), day_date.replace(hour=12, minute=0)),  # Mañana
-                (day_date.replace(hour=12, minute=0), day_date.replace(hour=14, minute=0)), # Almuerzo
-                (day_date.replace(hour=14, minute=0), day_date.replace(hour=18, minute=0)), # Tarde
-                (day_date.replace(hour=19, minute=0), day_date.replace(hour=22, minute=0)), # Noche
+                (timezone.make_aware(datetime.combine(day_date_date, time(9, 0))),
+                 timezone.make_aware(datetime.combine(day_date_date, time(12, 0)))),
+                
+                (timezone.make_aware(datetime.combine(day_date_date, time(12, 0))),
+                 timezone.make_aware(datetime.combine(day_date_date, time(14, 0)))),
+                
+                (timezone.make_aware(datetime.combine(day_date_date, time(14, 0))),
+                 timezone.make_aware(datetime.combine(day_date_date, time(18, 0)))),
+                
+                (timezone.make_aware(datetime.combine(day_date_date, time(19, 0))),
+                 timezone.make_aware(datetime.combine(day_date_date, time(22, 0)))),
             ]
             time_windows.extend(windows)
+        
         return time_windows
     
     def solve_orienteeering_problem(self, activities, time_windows, budget_constraint):
@@ -125,8 +228,6 @@ class ItineraryOptimizer:
         
         # Preparar datos para el algoritmo
         n_activities = len(activities)
-        n_windows = len(time_windows)
-        
         # Matriz de scores (valor de cada actividad)
         scores = np.zeros(n_activities)
         activity_objects = []
@@ -162,7 +263,7 @@ class ItineraryOptimizer:
         # Algoritmo greedy para el Problema de Orientación
         selected_activities = self._greedy_orienteeering(
             scores, time_matrix, activity_durations, activity_costs, 
-            time_windows, budget_constraint, n_windows
+            time_windows, budget_constraint, len(time_windows)
         )
         
         # Formatear resultado
@@ -251,6 +352,7 @@ class ItineraryOptimizer:
         accommodations = self._get_accommodations(10)
         activities_with_scores = self._get_activities_with_scores(50)
         restaurants = self._get_restaurants(20)
+        events = self._get_events(10)
         time_windows = self._create_time_windows()
         
         itineraries = []
@@ -258,22 +360,22 @@ class ItineraryOptimizer:
         
         for strategy in strategies[:max_itineraries]:
             itinerary = self._generate_strategy_itinerary(
-                strategy, accommodations, activities_with_scores, restaurants, time_windows
+                strategy, accommodations, activities_with_scores, 
+                restaurants, events, time_windows
             )
             if itinerary:
                 itineraries.append(itinerary)
         
         return itineraries
     
-    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, 
-                                   restaurants, time_windows):
+    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, restaurants, events, time_windows): 
         """
         Genera un itinerario para una estrategia específica
         """
         items = []
         total_cost = 0
         
-        # 1. Seleccionar alojamiento según estrategia
+        # 1. Seleccionar alojamiento
         if self.days > 1 and accommodations:
             acc = self._select_accommodation(strategy, accommodations)
             if acc:
@@ -287,7 +389,7 @@ class ItineraryOptimizer:
                 })
                 total_cost += acc_cost
         
-        # 2. Presupuesto para comidas (30%)
+        # 2. Planificar comidas
         meal_budget = self.budget * 0.3
         meal_plan = self._plan_meals(restaurants, strategy, meal_budget)
         for meal in meal_plan:
@@ -295,16 +397,33 @@ class ItineraryOptimizer:
                 items.append(meal)
                 total_cost += meal['cost']
         
-        # 3. Presupuesto restante para actividades
-        activities_budget = self.budget - total_cost
+        # 3. Presupuesto restante para actividades y eventos
+        activities_events_budget = self.budget - total_cost
         
-        # 4. Resolver Problema de Orientación para actividades
-        selected_activities = self.solve_orienteeering_problem(
-            activities_with_scores, time_windows, activities_budget
+        # 4. PRIMERO: Procesar eventos (sin restricción de ventanas)
+        scheduled_events, remaining_budget, _ = self._process_events(
+            events, time_windows, activities_events_budget
         )
         
-        # 5. Asignar actividades a ventanas de tiempo
-        scheduled_activities = self._schedule_activities(selected_activities, time_windows)
+        for event in scheduled_events:
+            items.append(event)
+            total_cost += event['cost']
+        
+        # 5. Identificar ventanas ocupadas por eventos
+        used_windows_for_events = self._identificar_ventanas_ocupadas_por_eventos(scheduled_events, time_windows)
+        
+        # 6. LUEGO: Resolver Problema de Orientación para actividades
+        available_time_windows = [
+            window for i, window in enumerate(time_windows) 
+            if i not in used_windows_for_events
+        ]
+        
+        selected_activities = self.solve_orienteeering_problem(
+            activities_with_scores, available_time_windows, remaining_budget
+        )
+        
+        # 7. Asignar actividades a ventanas de tiempo disponibles
+        scheduled_activities = self._schedule_activities(selected_activities, available_time_windows)
         
         for activity in scheduled_activities:
             if total_cost + activity['cost'] <= self.budget:
@@ -317,6 +436,25 @@ class ItineraryOptimizer:
             'strategy': strategy,
             'budget_utilization': total_cost / self.budget if self.budget > 0 else 0
         }
+    
+    def _identificar_ventanas_ocupadas_por_eventos(self, scheduled_events, time_windows):
+        """Identifica qué ventanas de tiempo están ocupadas por eventos"""
+        used_windows = set()
+        
+        for event in scheduled_events:
+            event_start = event['start_time']
+            event_end = event['end_time']
+            
+            # Buscar ventanas que se solapan con el evento
+            for i, (window_start, window_end) in enumerate(time_windows):
+                if self._hay_solapamiento(event_start, event_end, window_start, window_end):
+                    used_windows.add(i)
+        
+        return used_windows
+
+    def _hay_solapamiento(self, inicio1, fin1, inicio2, fin2):
+        """Determina si dos intervalos de tiempo se solapan"""
+        return max(inicio1, inicio2) < min(fin1, fin2)
     
     def _select_accommodation(self, strategy, accommodations):
         """Selecciona alojamiento según la estrategia"""
@@ -422,8 +560,7 @@ class ItineraryOptimizer:
         return scheduled
 
 # Función principal para uso en views
-def generate_optimized_itineraries(request, destination, start_date, end_date, 
-                                 budget, travelers, preferences=None):
+def generate_optimized_itineraries(request, destination, start_date, end_date, budget, travelers, preferences=None):
     """
     Función principal para generar itinerarios optimizados
     """
