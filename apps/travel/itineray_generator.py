@@ -591,10 +591,8 @@ class ItineraryOptimizer:
                     meal_types_to_include = ['breakfast', 'lunch', 'dinner']
                 elif current_hour < 15:
                     meal_types_to_include = ['lunch', 'dinner']
-                elif current_hour < 19:
-                    meal_types_to_include = ['dinner']
                 else:
-                    meal_types_to_include = ['dinner'] if current_hour < 21 else []
+                    meal_types_to_include = ['dinner']
             
             for i, meal_type in enumerate(meal_types_to_include):
                 restaurant_idx = (day * 3 + i) % len(selected_restaurants)

@@ -53,7 +53,6 @@ class ItineraryPreviewView(APIView):
     def _format_itineraries_for_frontend(self, itinerarios, destino, desde, hasta, cantidad_personas):
         """Formatea los itinerarios agregando número de día a cada servicio"""
         formatted_itineraries = []
-        
         dias_totales = max(1, (hasta - desde).days)
         
         for idx, itinerario in enumerate(itinerarios):
@@ -106,7 +105,7 @@ class ItineraryPreviewView(APIView):
         
         # Calcular diferencia de días
         diferencia = (item_date.date() - start_date.date()).days
-        return max(1, diferencia + 1)  # Día 1, 2, 3, ...
+        return max(1, diferencia + 1)
     
     def _map_service_type_to_frontend(self, backend_type):
         """Mapea los tipos del backend a los que espera el frontend"""
