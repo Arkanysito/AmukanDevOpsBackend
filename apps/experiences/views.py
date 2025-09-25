@@ -1,13 +1,13 @@
 # apps/experiences/views.py
-from rest_framework.decorators import api_view, permission_classes, authentication_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError
 
-from apps.organizations.models import Organization
+from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
 from apps.experiences.models import (
     AccommodationService,
@@ -50,8 +50,7 @@ MODEL_BY_TYPE = {
 
 
 @api_view(["POST"])
-@authentication_classes([])      # sin auth por ahora
-@permission_classes([AllowAny])  # abierto
+@permission_classes([IsAuthenticated])  # Ahora requiere autenticación
 def create_service(request):
     service_type = (request.data.get("service_type") or "").lower()
     if service_type not in MODEL_BY_TYPE:
@@ -60,11 +59,24 @@ def create_service(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    
-    org_id = request.data.get("organization_id")
-    if not org_id:
-        return Response({"detail": "organization_id es requerido"}, status=status.HTTP_400_BAD_REQUEST)
-    organization = get_object_or_404(Organization, pk=org_id)
+    # Obtener la organización del usuario autenticado
+    try:
+        # Buscar la relación OrganizationUser para este usuario
+        organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
+        
+        if not organization_user:
+            return Response(
+                {"detail": "El usuario no pertenece a ninguna organización"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        organization = organization_user.organization_id
+        
+    except OrganizationUser.DoesNotExist:
+        return Response(
+            {"detail": "El usuario no pertenece a ninguna organización"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     place = None
     place_id = request.data.get("place_id")
