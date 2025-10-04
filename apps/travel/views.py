@@ -4,6 +4,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from apps.travel.itineray_generator import generate_optimized_itineraries
+from apps.users.models import CustomUser
+from apps.core.constants import InteractionAction
+from apps.tracking.models import Interaction
+import json
 
 class ItineraryPreviewView(APIView):
     def post(self, request):
@@ -39,23 +43,140 @@ class ItineraryPreviewView(APIView):
             request, destino, desde, hasta, presupuesto, cantidad_personas, preferences
         )
 
+        # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS
+        self._save_search_interaction(request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios)
+
         if not itinerarios:
             return Response({
                 "message": "No se pudo generar un itinerario con los parámetros dados",
                 "suggestion": "Intente con un destino diferente o verifique la disponibilidad de servicios"
             }, status=status.HTTP_204_NO_CONTENT)
 
-        # Formatear respuesta para el frontend
-        response_data = self._format_itineraries_for_frontend(itinerarios, destino, desde, hasta, cantidad_personas)
+        # Asegurarse de que tenemos la estructura correcta
+        if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
+            response_data = self._format_itineraries_for_frontend(itinerarios, destino, desde, hasta, cantidad_personas)
+        else:
+            # Si viene en otro formato, crear la estructura esperada
+            response_data = self._format_itineraries_for_frontend(
+                {'itineraries': itinerarios}, destino, desde, hasta, cantidad_personas
+            )
         
         return Response(response_data, status=status.HTTP_200_OK)
+
+    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios):
+        """Guarda la búsqueda en la base de datos como una interacción"""
+        try:
+            # Obtener información del usuario y sesión
+            user = request.user if request.user.is_authenticated else None
+            session_id = self._get_session_id(request)
+            
+            # Preparar metadata de la búsqueda
+            metadata = {
+                'search_parameters': {
+                    'destino': destino,
+                    'desde': desde.isoformat() if hasattr(desde, 'isoformat') else str(desde),
+                    'hasta': hasta.isoformat() if hasattr(hasta, 'isoformat') else str(hasta),
+                    'presupuesto': presupuesto,
+                    'cantidad_personas': cantidad_personas,
+                    'preferences': preferences
+                },
+                'search_results': {
+                    'itineraries_count': len(itinerarios.get('itineraries', [])) if isinstance(itinerarios, dict) and 'itineraries' in itinerarios else len(itinerarios) if isinstance(itinerarios, list) else 0,
+                    'total_cost_range': self._get_cost_range(itinerarios),
+                    'strategies_available': self._get_available_strategies(itinerarios)
+                },
+                'request_info': {
+                    'ip_address': self._get_client_ip(request),
+                    'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+                    'timestamp': timezone.now().isoformat()
+                }
+            }
+
+            # Crear la interacción
+            interaction = Interaction.objects.create(
+                user_id=user,
+                session_id=session_id,
+                action=InteractionAction.SEARCH,
+                ip_address=self._get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                metadata=metadata
+            )
+
+            return interaction
+
+        except Exception as e:
+            # Log del error pero no interrumpir el flujo principal
+            print(f"Error al guardar interacción de búsqueda: {str(e)}")
+            return None
+
+    def _get_session_id(self, request):
+        """Obtiene o crea un ID de sesión para el usuario"""
+        if not request.session.session_key:
+            request.session.create()
+        return request.session.session_key
+
+    def _get_client_ip(self, request):
+        """Obtiene la IP real del cliente"""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+
+    def _get_cost_range(self, itinerarios):
+        """Obtiene el rango de costos de los itinerarios generados"""
+        if not itinerarios:
+            return {'min': 0, 'max': 0}
+        
+        try:
+            if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
+                costs = [itinerario.get('total_cost', 0) for itinerario in itinerarios['itineraries']]
+            elif isinstance(itinerarios, list):
+                costs = [itinerario.get('total_cost', 0) for itinerario in itinerarios]
+            else:
+                return {'min': 0, 'max': 0}
+            
+            valid_costs = [cost for cost in costs if cost and cost > 0]
+            if valid_costs:
+                return {
+                    'min': min(valid_costs),
+                    'max': max(valid_costs)
+                }
+        except (KeyError, TypeError, ValueError):
+            pass
+        
+        return {'min': 0, 'max': 0}
+
+    def _get_available_strategies(self, itinerarios):
+        """Obtiene las estrategias disponibles en los resultados"""
+        if not itinerarios:
+            return []
+        
+        try:
+            if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
+                strategies = [itinerario.get('strategy', 'unknown') for itinerario in itinerarios['itineraries']]
+            elif isinstance(itinerarios, list):
+                strategies = [itinerario.get('strategy', 'unknown') for itinerario in itinerarios]
+            else:
+                return []
+            
+            return list(set(strategies))  # Remover duplicados
+        except (KeyError, TypeError):
+            return []
     
     def _format_itineraries_for_frontend(self, itinerarios, destino, desde, hasta, cantidad_personas):
         """Formatea los itinerarios agregando número de día a cada servicio"""
         formatted_itineraries = []
         dias_totales = max(1, (hasta - desde).days)
         
-        for idx, itinerario in enumerate(itinerarios):
+        # Asegurarse de que estamos accediendo a la lista correcta
+        if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
+            itinerarios_list = itinerarios['itineraries']
+        else:
+            itinerarios_list = itinerarios
+        
+        for idx, itinerario in enumerate(itinerarios_list):
             servicios = {
                 "hospedaje": [],
                 "transporte": [],
@@ -64,33 +185,35 @@ class ItineraryPreviewView(APIView):
                 "eventos": []
             }
             
-            for item in itinerario["items"]:
-                servicio_formateado = self._format_service_item(item)
-                
-                # Agregar número de día al servicio
-                dia_numero = self._obtener_numero_dia(item, desde)
-                servicio_formateado["dia"] = dia_numero
-                
-                # Mapear tipos al formato que espera el frontend
-                tipo_frontend = self._map_service_type_to_frontend(item['type'])
-                if tipo_frontend:
-                    servicios[tipo_frontend].append(servicio_formateado)
+            # Verificar que itinerario tenga la estructura esperada
+            if isinstance(itinerario, dict) and 'items' in itinerario:
+                for item in itinerario["items"]:
+                    servicio_formateado = self._format_service_item(item)
+                    
+                    # Agregar número de día al servicio
+                    dia_numero = self._obtener_numero_dia(item, desde)
+                    servicio_formateado["dia"] = dia_numero
+                    
+                    # Mapear tipos al formato que espera el frontend
+                    tipo_frontend = self._map_service_type_to_frontend(item['type'])
+                    if tipo_frontend:
+                        servicios[tipo_frontend].append(servicio_formateado)
 
-            # Calcular duración
-            if dias_totales == 1:
-                duracion = "1 día"
-            else:
-                duracion = f"{dias_totales} días / {dias_totales - 1} noches"
+                # Calcular duración
+                if dias_totales == 1:
+                    duracion = "1 día"
+                else:
+                    duracion = f"{dias_totales} días / {dias_totales - 1} noches"
 
-            formatted_itineraries.append({
-                "id": idx + 1,
-                "titulo": f"Itinerario {idx+1} para {destino} ({itinerario.get('strategy', 'standard')})",
-                "duracion": duracion,
-                "cantidad_personas": cantidad_personas,
-                "presupuesto": float(itinerario["total_cost"]),
-                "utilizacion_presupuesto": float(itinerario.get("budget_utilization", 0)),
-                "servicios": servicios
-            })
+                formatted_itineraries.append({
+                    "id": idx + 1,
+                    "titulo": f"Itinerario {idx+1} para {destino} ({itinerario.get('strategy', 'standard')})",
+                    "duracion": duracion,
+                    "cantidad_personas": cantidad_personas,
+                    "presupuesto": float(itinerario["total_cost"]),
+                    "utilizacion_presupuesto": float(itinerario.get("budget_utilization", 0)),
+                    "servicios": servicios
+                })
         
         return formatted_itineraries
     

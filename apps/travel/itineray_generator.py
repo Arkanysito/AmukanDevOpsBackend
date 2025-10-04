@@ -27,7 +27,21 @@ class ItineraryOptimizer:
         self.days = max(1, (self.end_date - self.start_date).days)  # Mínimo 1 día
         self.zone = self._get_zone()
         self.time_slots_per_day = 4 
+
+        # Sistema de métricas
+        self.performance_metrics = {
+            'start_time': timezone.now(),
+            'candidate_activities': 0,
+            'selected_activities': 0,
+            'budget_efficiency': 0,
+            'time_efficiency': 0
+        }
         
+    # Cache simple en memoria para coordenadas
+    def __init_cache(self):
+        self._coordinates_cache = {}
+        self._distance_cache = {}
+    
     def _get_zone(self):
         """Busca la zona del destino"""
         return Zone.objects.filter(
@@ -44,10 +58,15 @@ class ItineraryOptimizer:
         return dt
     
     def _calculate_distance(self, coord1, coord2):
-        """Calcula distancia haversine entre dos coordenadas (en km)"""
+        """Calcula distancia haversine entre dos coordenadas (en km) con cache"""
         if not coord1 or not coord2:
             return float('inf')
-            
+        
+        # Cache de distancias
+        cache_key = (coord1, coord2)
+        if cache_key in getattr(self, '_distance_cache', {}):
+            return self._distance_cache[cache_key]
+        
         # Convertir a radianes
         lat1, lon1 = math.radians(coord1[0]), math.radians(coord1[1])
         lat2, lon2 = math.radians(coord2[0]), math.radians(coord2[1])
@@ -57,22 +76,38 @@ class ItineraryOptimizer:
         dlon = lon2 - lon1
         a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
         c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-        return 6371 * c  # Radio de la Tierra en km
+        distance = 6371 * c
+        
+        if not hasattr(self, '_distance_cache'):
+            self._distance_cache = {}
+        self._distance_cache[cache_key] = distance
+        
+        return distance
     
     def _get_coordinates(self, obj):
-        """Obtiene coordenadas de un objeto"""
+        """Obtiene coordenadas de un objeto con cache"""
+        cache_key = id(obj)
+        if not hasattr(self, '_coordinates_cache'):
+            self._coordinates_cache = {}
+        
+        if cache_key in self._coordinates_cache:
+            return self._coordinates_cache[cache_key]
+        
+        coords = None
         if hasattr(obj, 'coordinates') and obj.coordinates:
-            return (obj.coordinates.y, obj.coordinates.x)
+            coords = (obj.coordinates.y, obj.coordinates.x)
         elif hasattr(obj, 'place_id') and hasattr(obj.place_id, 'coordinates') and obj.place_id.coordinates:
-            return (obj.place_id.coordinates.y, obj.place_id.coordinates.x)
-        return None
+            coords = (obj.place_id.coordinates.y, obj.place_id.coordinates.x)
+        
+        self._coordinates_cache[cache_key] = coords
+        return coords
     
     def _get_activities_with_scores(self, top_k=50):
         """Obtiene actividades con sus scores de recomendación"""
         try:
             activities = recommend_places(self.user, 'activity', self.zone, top_k=top_k)
-            # Asegurar formato (servicio, score)
             if activities and isinstance(activities[0], tuple):
+                self.performance_metrics['candidate_activities'] = len(activities)
                 return activities
             else:
                 return [(act, 0.5) for act in activities]
@@ -80,7 +115,9 @@ class ItineraryOptimizer:
             activities = ActivityService.objects.all()
             if self.zone:
                 activities = activities.filter(place_id__zone_id=self.zone)
-            return [(act, 0.5) for act in activities[:top_k]]
+            result = [(act, 0.5) for act in activities[:top_k]]
+            self.performance_metrics['candidate_activities'] = len(result)
+            return result
     
     def _get_accommodations(self, top_k=10):
         """Obtiene alojamientos"""
@@ -135,7 +172,6 @@ class ItineraryOptimizer:
             return filtered_events[:top_k]
             
         except Exception as e:
-            print(f"Error getting events: {e}")
             # Fallback con criterio flexible
             events = Event.objects.filter(
                 Q(start_date__lte=self.end_date) & Q(end_date__gte=self.start_date)
@@ -264,6 +300,7 @@ class ItineraryOptimizer:
         
         return time_windows
     
+    # Algoritmo mejorado con diversidad geográfica
     def solve_orienteeering_problem(self, activities, time_windows, budget_constraint):
         """
         Resuelve el Problema de Orientación para seleccionar actividades óptimas
@@ -286,24 +323,37 @@ class ItineraryOptimizer:
         activity_objects = []
         
         for i, (activity, score) in enumerate(activities):
-            scores[i] = float(score) * 100  # Escalar para mejor optimización
+            # Ajuste dinámico de scores por preferencias
+            adjusted_score = float(score) * 100
+            
+            # Bonus por coincidencia con preferencias del usuario
+            if self.preferences:
+                if hasattr(activity, 'category'):
+                    pref_categories = self.preferences.get('categories', [])
+                    if activity.category in pref_categories:
+                        adjusted_score *= 1.3  # 30% bonus
+                
+                # Penalización por baja rating si el usuario valora calidad
+                if self.preferences.get('prioritize_quality', False):
+                    if hasattr(activity, 'rating') and activity.rating < 3.5:
+                        adjusted_score *= 0.7
+            
+            scores[i] = adjusted_score
             activity_objects.append(activity)
         
-        # Matriz de distancias entre actividades
+        # Matriz de distancias entre actividades con cache
         distance_matrix = np.zeros((n_activities, n_activities))
         coordinates = [self._get_coordinates(act) for act in activity_objects]
         
         for i in range(n_activities):
-            for j in range(n_activities):
-                if i == j:
-                    distance_matrix[i, j] = 0
-                else:
-                    distance_matrix[i, j] = self._calculate_distance(coordinates[i], coordinates[j])
+            for j in range(i+1, n_activities):
+                dist = self._calculate_distance(coordinates[i], coordinates[j])
+                distance_matrix[i, j] = dist
+                distance_matrix[j, i] = dist
         
         # Matriz de tiempos de viaje (asumir 20 km/h en ciudad)
-        time_matrix = distance_matrix / 20 * 60  # Convertir a minutos
+        time_matrix = distance_matrix / 20 * 60 # Convertir a minutos
         
-        # Tiempos de actividad (usar duration_minutes o valor por defecto)
         activity_durations = np.zeros(n_activities)
         for i, activity in enumerate(activity_objects):
             activity_durations[i] = getattr(activity, 'duration_minutes', 120)
@@ -313,10 +363,11 @@ class ItineraryOptimizer:
         for i, activity in enumerate(activity_objects):
             activity_costs[i] = float(activity.price) * self.travelers
         
-        # Algoritmo greedy para el Problema de Orientación
-        selected_activities = self._greedy_orienteeering(
-            scores, time_matrix, activity_durations, activity_costs, 
-            time_windows, budget_constraint, len(time_windows)
+        # Algoritmo greedy para el Problema de Orientación mejorado con diversidad
+        selected_activities = self._greedy_orienteeering_enhanced(
+            scores, distance_matrix, time_matrix, activity_durations, 
+            activity_costs, coordinates, time_windows, budget_constraint, 
+            len(time_windows)
         )
         
         # Formatear resultado
@@ -330,35 +381,59 @@ class ItineraryOptimizer:
                 'duration': activity_durations[idx]
             })
         
+        self.performance_metrics['selected_activities'] = len(result)
+        
         return result
     
-    def _greedy_orienteeering(self, scores, time_matrix, durations, costs, 
-                            time_windows, budget_constraint, max_activities):
-        """
-        Algoritmo greedy para el Problema de Orientación
-        """
+    def _greedy_orienteeering_enhanced(self, scores, distance_matrix, time_matrix, 
+                                      durations, costs, coordinates, time_windows, 
+                                      budget_constraint, max_activities):
+        """Algoritmo greedy mejorado con clustering geográfico"""
         n = len(scores)
         selected = []
         remaining_budget = budget_constraint
         remaining_time_windows = list(range(len(time_windows)))
         
-        # Ordenar actividades por ratio score/(costo + tiempo)
+        # Penalización por clustering excesivo
+        geographic_clusters = self._simple_geographic_clustering(coordinates, n_clusters=3)
+        cluster_counts = defaultdict(int)
+        
+        # Calcular ratios con penalización por distancia
         ratios = []
         for i in range(n):
-            total_cost = costs[i] + 0.1  # Evitar división por cero
-            time_value = durations[i] / 60  # Convertir a horas
-            ratio = scores[i] / (total_cost + time_value)
-            ratios.append((ratio, i))
+            if costs[i] <= 0:
+                continue
+                
+            # Ratio base: score / (costo + tiempo)
+            total_cost = costs[i] + 0.1
+            time_value = durations[i] / 60
+            base_ratio = scores[i] / (total_cost + time_value)
+            
+            # Bonus por diversidad geográfica
+            cluster_id = geographic_clusters[i]
+            diversity_bonus = 1.0 / (1.0 + cluster_counts[cluster_id] * 0.2)
+            
+            final_ratio = base_ratio * diversity_bonus
+            ratios.append((final_ratio, i, cluster_id))
         
         ratios.sort(reverse=True)
         
-        # Seleccionar actividades greedy
-        for ratio, idx in ratios:
+        # Selección greedy con límite de distancia
+        MAX_TRAVEL_TIME = 45  # minutos máximo entre actividades
+        
+        for ratio, idx, cluster_id in ratios:
             if costs[idx] <= remaining_budget and len(selected) < max_activities:
-                # Verificar si cabe en alguna ventana de tiempo
-                activity_duration = durations[idx] / 60  # Horas
+                activity_duration = durations[idx] / 60
                 
-                # Encontrar ventana de tiempo disponible
+                # Verificar distancia si ya hay actividades seleccionadas
+                if selected:
+                    last_idx = selected[-1]
+                    travel_time = time_matrix[last_idx, idx]
+                    
+                    # Saltar si está muy lejos
+                    if travel_time > MAX_TRAVEL_TIME:
+                        continue
+                
                 time_window_idx = self._find_available_time_window(
                     selected, idx, time_matrix, durations, time_windows, remaining_time_windows
                 )
@@ -367,8 +442,40 @@ class ItineraryOptimizer:
                     selected.append(idx)
                     remaining_budget -= costs[idx]
                     remaining_time_windows.remove(time_window_idx)
+                    cluster_counts[cluster_id] += 1
         
         return selected
+    
+    def _simple_geographic_clustering(self, coordinates, n_clusters=3):
+        """Clustering geográfico simple usando k-means simplificado"""
+        valid_coords = [(i, c) for i, c in enumerate(coordinates) if c is not None]
+        
+        if len(valid_coords) < n_clusters:
+            return {i: 0 for i in range(len(coordinates))}
+        
+        # Inicializar centroides aleatoriamente
+        random.shuffle(valid_coords)
+        centroids = [coord for _, coord in valid_coords[:n_clusters]]
+        
+        # Asignación simple (sin iteración completa de k-means para eficiencia)
+        clusters = {}
+        for i, coord in enumerate(coordinates):
+            if coord is None:
+                clusters[i] = 0
+                continue
+            
+            min_dist = float('inf')
+            best_cluster = 0
+            
+            for c_idx, centroid in enumerate(centroids):
+                dist = self._calculate_distance(coord, centroid)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_cluster = c_idx
+            
+            clusters[i] = best_cluster
+        
+        return clusters
     
     def _find_available_time_window(self, selected, new_idx, time_matrix, durations, 
                                   time_windows, available_windows):
@@ -419,9 +526,36 @@ class ItineraryOptimizer:
             if itinerary:
                 itineraries.append(itinerary)
         
+        # Calcular métricas finales
+        self.performance_metrics['end_time'] = timezone.now()
+        self.performance_metrics['execution_time'] = (
+            self.performance_metrics['end_time'] - self.performance_metrics['start_time']
+        ).total_seconds()
+        
+        if itineraries:
+            avg_budget_util = sum(it['budget_utilization'] for it in itineraries) / len(itineraries)
+            self.performance_metrics['budget_efficiency'] = avg_budget_util
+        
         return itineraries
     
-    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, restaurants, events, time_windows): 
+    # Método para obtener logs de optimización
+    def get_optimization_report(self):
+        """Retorna un reporte detallado de la optimización"""
+        return {
+            'metrics': self.performance_metrics,
+            'summary': {
+                'total_candidates': self.performance_metrics['candidate_activities'],
+                'total_selected': self.performance_metrics['selected_activities'],
+                'selection_rate': (
+                    self.performance_metrics['selected_activities'] / 
+                    self.performance_metrics['candidate_activities']
+                    if self.performance_metrics['candidate_activities'] > 0 else 0
+                ),
+                'execution_time_ms': self.performance_metrics.get('execution_time', 0) * 1000
+            }
+        }
+    
+    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, restaurants, events, time_windows):
         """
         Genera un itinerario para una estrategia específica
         """
@@ -649,10 +783,226 @@ class ItineraryOptimizer:
         
         return scheduled
 
-# Función principal para uso en views
-def generate_optimized_itineraries(request, destination, start_date, end_date, budget, travelers, preferences=None):
+
+# MEJORA 9: Sistema de validación de itinerarios
+class ItineraryValidator:
+    """Valida la calidad y viabilidad de los itinerarios generados"""
+    
+    @staticmethod
+    def validate_itinerary(itinerary, budget, days):
+        """Valida un itinerario y retorna score de calidad"""
+        validation_results = {
+            'is_valid': True,
+            'issues': [],
+            'quality_score': 0,
+            'metrics': {}
+        }
+        
+        items = itinerary.get('items', [])
+        total_cost = itinerary.get('total_cost', 0)
+        
+        # 1. Validar presupuesto
+        if total_cost > budget:
+            validation_results['is_valid'] = False
+            validation_results['issues'].append('Budget exceeded')
+        
+        budget_usage = total_cost / budget if budget > 0 else 0
+        validation_results['metrics']['budget_usage'] = budget_usage
+        
+        # 2. Validar distribución temporal
+        activities_by_day = {}
+        for item in items:
+            if item['type'] in ['activity', 'event']:
+                day = item['date'].date()
+                activities_by_day[day] = activities_by_day.get(day, 0) + 1
+        
+        if activities_by_day:
+            avg_activities = sum(activities_by_day.values()) / len(activities_by_day)
+            validation_results['metrics']['avg_activities_per_day'] = avg_activities
+            
+            # Penalizar días vacíos o sobrecargados
+            if avg_activities < 2:
+                validation_results['issues'].append('Too few activities per day')
+            elif avg_activities > 6:
+                validation_results['issues'].append('Too many activities per day')
+        
+        # 3. Validar diversidad
+        activity_types = [item['service'].__class__.__name__ for item in items if item.get('service')]
+        diversity_score = len(set(activity_types)) / len(activity_types) if activity_types else 0
+        validation_results['metrics']['diversity'] = diversity_score
+        
+        # 4. Calcular score de calidad (0-100)
+        quality_score = 0
+        
+        # Budget efficiency (30 puntos)
+        if 0.7 <= budget_usage <= 0.95:
+            quality_score += 30
+        elif 0.5 <= budget_usage < 0.7:
+            quality_score += 20
+        elif budget_usage > 0.95:
+            quality_score += 25
+        
+        # Activities distribution (30 puntos)
+        if 2 <= avg_activities <= 5:
+            quality_score += 30
+        elif 1 <= avg_activities < 2 or 5 < avg_activities <= 6:
+            quality_score += 20
+        
+        # Diversity (20 puntos)
+        quality_score += diversity_score * 20
+        
+        # Completeness (20 puntos)
+        has_accommodation = any(item['type'] == 'accommodation' for item in items)
+        has_dining = any(item['type'] == 'dining' for item in items)
+        has_activities = any(item['type'] == 'activity' for item in items)
+        
+        completeness = sum([has_accommodation or days == 1, has_dining, has_activities])
+        quality_score += (completeness / 3) * 20
+        
+        validation_results['quality_score'] = round(quality_score, 2)
+        
+        return validation_results
+
+
+# Sistema de comparación de itinerarios
+class ItineraryComparator:
+    """Compara múltiples itinerarios y sugiere el mejor según criterios"""
+    
+    @staticmethod
+    def compare_itineraries(itineraries, user_priorities=None):
+        """
+        Compara itinerarios y retorna ranking
+        
+        Args:
+            itineraries: Lista de itinerarios
+            user_priorities: Dict con pesos para criterios
+                {'budget': 0.3, 'activities': 0.4, 'diversity': 0.3}
+        """
+        if not itineraries:
+            return []
+        
+        # Prioridades por defecto
+        priorities = user_priorities or {
+            'budget_efficiency': 0.35,
+            'activity_count': 0.25,
+            'diversity': 0.20,
+            'quality': 0.20
+        }
+        
+        comparisons = []
+        
+        for idx, itinerary in enumerate(itineraries):
+            items = itinerary.get('items', [])
+            
+            # Métricas
+            activity_count = sum(1 for item in items if item['type'] in ['activity', 'event'])
+            
+            activity_types = [
+                item['service'].__class__.__name__ 
+                for item in items 
+                if item.get('service')
+            ]
+            diversity = len(set(activity_types)) / len(activity_types) if activity_types else 0
+            
+            budget_util = itinerary.get('budget_utilization', 0)
+            
+            # Score compuesto
+            score = (
+                priorities['budget_efficiency'] * budget_util * 100 +
+                priorities['activity_count'] * min(activity_count / 5, 1) * 100 +
+                priorities['diversity'] * diversity * 100 +
+                priorities['quality'] * 80  # Base quality score
+            )
+            
+            comparisons.append({
+                'index': idx,
+                'strategy': itinerary.get('strategy', 'unknown'),
+                'score': score,
+                'metrics': {
+                    'activity_count': activity_count,
+                    'diversity': round(diversity, 2),
+                    'budget_utilization': round(budget_util, 2),
+                    'total_cost': itinerary.get('total_cost', 0)
+                },
+                'recommendation': ItineraryComparator._get_recommendation(
+                    itinerary.get('strategy'), score
+                )
+            })
+        
+        # Ordenar por score
+        comparisons.sort(key=lambda x: x['score'], reverse=True)
+        
+        return comparisons
+    
+    @staticmethod
+    def _get_recommendation(strategy, score):
+        """Genera recomendación textual"""
+        if score >= 85:
+            return f"Excelente opción {strategy}. Balance óptimo de todos los criterios."
+        elif score >= 70:
+            return f"Buena opción {strategy}. Cumple bien los objetivos principales."
+        elif score >= 60:
+            return f"Opción {strategy} aceptable. Algunos aspectos podrían mejorarse."
+        else:
+            return f"Opción {strategy} básica. Considera ajustar parámetros."
+
+
+# MEJORA 11: Función helper para análisis de sensibilidad
+def analyze_budget_sensitivity(optimizer, budget_variations=[0.8, 1.0, 1.2]):
     """
-    Función principal para generar itinerarios optimizados
+    Analiza cómo cambian los itinerarios con variaciones de presupuesto
+    
+    Args:
+        optimizer: Instancia de ItineraryOptimizer
+        budget_variations: Lista de multiplicadores de presupuesto
+    
+    Returns:
+        Dict con análisis de sensibilidad
+    """
+    original_budget = optimizer.budget
+    results = {}
+    
+    for multiplier in budget_variations:
+        optimizer.budget = original_budget * multiplier
+        itineraries = optimizer.generate_optimized_itineraries(max_itineraries=1)
+        
+        if itineraries:
+            itinerary = itineraries[0]
+            results[f'{int(multiplier*100)}%'] = {
+                'budget': optimizer.budget,
+                'total_cost': itinerary['total_cost'],
+                'activity_count': sum(
+                    1 for item in itinerary['items'] 
+                    if item['type'] in ['activity', 'event']
+                ),
+                'utilization': itinerary['budget_utilization']
+            }
+    
+    # Restaurar presupuesto original
+    optimizer.budget = original_budget
+    
+    return results
+
+
+# Función principal mejorada
+def generate_optimized_itineraries(request, destination, start_date, end_date, 
+                                  budget, travelers, preferences=None, 
+                                  include_analytics=False):
+    """
+    Función principal para generar itinerarios optimizados con analytics opcionales
+    
+    Args:
+        request: HTTP request
+        destination: Destino del viaje
+        start_date: Fecha inicio
+        end_date: Fecha fin
+        budget: Presupuesto total
+        travelers: Número de viajeros
+        preferences: Preferencias del usuario (opcional)
+        include_analytics: Si True, incluye reporte de optimización
+    
+    Returns:
+        Dict con itinerarios y analytics opcionales
     """
     optimizer = ItineraryOptimizer(
         user=request.user if request.user.is_authenticated else None,
@@ -664,4 +1014,33 @@ def generate_optimized_itineraries(request, destination, start_date, end_date, b
         preferences=preferences or {}
     )
     
-    return optimizer.generate_optimized_itineraries(max_itineraries=3)
+    itineraries = optimizer.generate_optimized_itineraries(max_itineraries=3)
+    
+    # Validar itinerarios
+    validated_itineraries = []
+    for itinerary in itineraries:
+        validation = ItineraryValidator.validate_itinerary(
+            itinerary, budget, optimizer.days
+        )
+        itinerary['validation'] = validation
+        validated_itineraries.append(itinerary)
+    
+    # Comparar itinerarios
+    comparison = ItineraryComparator.compare_itineraries(
+        validated_itineraries, 
+        preferences.get('priorities') if preferences else None
+    )
+    
+    result = {
+        'itineraries': validated_itineraries,
+        'comparison': comparison,
+        'best_itinerary_index': comparison[0]['index'] if comparison else None
+    }
+    
+    # Incluir analytics si se solicita
+    if include_analytics:
+        result['analytics'] = {
+            'optimization_report': optimizer.get_optimization_report(),
+            'budget_sensitivity': analyze_budget_sensitivity(optimizer)
+        }
+    return result
