@@ -168,7 +168,7 @@ class ItineraryPreviewView(APIView):
     def _format_itineraries_for_frontend(self, itinerarios, destino, desde, hasta, cantidad_personas):
         """Formatea los itinerarios agregando número de día a cada servicio"""
         formatted_itineraries = []
-        dias_totales = max(1, (hasta - desde).days)
+        dias_totales = max(1, (hasta - desde).days + 1)
         
         # Asegurarse de que estamos accediendo a la lista correcta
         if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:

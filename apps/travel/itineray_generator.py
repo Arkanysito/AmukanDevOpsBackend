@@ -21,12 +21,32 @@ class ItineraryOptimizer:
         self.preferences = preferences or {}
 
         # Detectar si es same-day (mismo día)
+        self.current_time = timezone.now()
         self.is_same_day = self.start_date.date() == self.end_date.date()
-        self.current_time = timezone.now() if self.is_same_day else None
         
-        self.days = max(1, (self.end_date - self.start_date).days)  # Mínimo 1 día
+        if self.is_same_day:
+            self.days = 1
+            self.nights = 0
+        else:
+            date_diff = (self.end_date.date() - self.start_date.date()).days
+            self.days = date_diff + 1
+            self.nights = date_diff
+        
+        if self.end_date < self.start_date:
+            raise ValueError("La fecha de fin no puede ser anterior a la fecha de inicio")
+        
         self.zone = self._get_zone()
-        self.time_slots_per_day = 4 
+        self.time_slots_per_day = 4
+
+        # Definir rangos de horarios incluidos nocturnos
+        self.time_periods = {
+            'morning': (9, 12),      # Mañana
+            'lunch': (12, 14),       # Almuerzo
+            'afternoon': (14, 18),   # Tarde
+            'evening': (19, 22),     # Noche temprana
+            'night': (22, 24),       # Noche
+            'late_night': (0, 3)     # Madrugada (cruza medianoche)
+        }
 
         # Sistema de métricas
         self.performance_metrics = {
@@ -102,6 +122,69 @@ class ItineraryOptimizer:
         self._coordinates_cache[cache_key] = coords
         return coords
     
+    def _is_night_event(self, event_start, event_end):
+        """
+        Determina si un evento es nocturno.
+        
+        Criterios:
+        - Empieza después de las 22:00 (10 PM)
+        - O termina después de medianoche (cruza a día siguiente)
+        - O empieza después de medianoche y antes de las 6 AM
+        """
+        start_hour = event_start.hour
+        end_hour = event_end.hour
+        
+        # Evento que empieza de noche (22:00 - 23:59)
+        if start_hour >= 22:
+            return True
+        
+        # Evento que empieza en madrugada (00:00 - 05:59)
+        if start_hour < 6:
+            return True
+        
+        # Evento que cruza medianoche (ej: 23:00 a 02:00)
+        # Si end_date es día siguiente y termina temprano
+        if event_end.date() > event_start.date() and end_hour < 6:
+            return True
+        
+        return False
+    
+    def _get_event_time_category(self, event_start, event_end):
+        """
+        Categoriza un evento según su horario.
+        
+        Returns:
+            str: 'morning', 'lunch', 'afternoon', 'evening', 'night', 'late_night', 'multi_period'
+        """
+        start_hour = event_start.hour
+        end_hour = event_end.hour
+        
+        # Calcular duración
+        duration_hours = (event_end - event_start).total_seconds() / 3600
+        
+        # Evento que cruza medianoche
+        if event_end.date() > event_start.date():
+            if start_hour >= 22:
+                return 'late_night'  # Evento nocturno largo
+            else:
+                return 'multi_period'  # Evento que cruza múltiples períodos
+        
+        # Eventos por horario de inicio
+        if 9 <= start_hour < 12:
+            return 'morning'
+        elif 12 <= start_hour < 14:
+            return 'lunch'
+        elif 14 <= start_hour < 18:
+            return 'afternoon'
+        elif 18 <= start_hour < 22:
+            return 'evening'
+        elif 22 <= start_hour < 24:
+            return 'night'
+        elif 0 <= start_hour < 6:
+            return 'late_night'
+        else:
+            return 'multi_period'
+    
     def _get_activities_with_scores(self, top_k=50):
         """Obtiene actividades con sus scores de recomendación"""
         try:
@@ -146,39 +229,60 @@ class ItineraryOptimizer:
             return list(restaurants[:top_k])
     
     def _get_events(self, top_k=15):
-        """Obtiene eventos dentro del rango de fechas con horarios flexibles"""
+        """
+        Obtiene eventos incluyendo eventos nocturnos.
+        
+        No filtra eventos nocturnos, los incluye con metadata especial
+        """
         try:
+            from apps.recommendation.services import recommend_places
             events = recommend_places(self.user, 'event', self.zone, top_k=top_k)
             if events and isinstance(events[0], tuple):
                 events = [event for event, score in events]
             
             filtered_events = []
+            night_events_count = 0
+            
             for event in events:
                 event_start = self._ensure_timezone_aware(event.start_date)
                 event_end = self._ensure_timezone_aware(event.end_date)
                 
-                # Para same-day: filtrar eventos que ya terminaron
-                if self.is_same_day and self.current_time:
+                # Para mismo día: filtrar eventos que ya terminaron
+                if self.is_same_day:
                     if event_end < self.current_time:
-                        continue  # Saltar eventos que ya terminaron
-                    # Para eventos en curso, ajustar el inicio al tiempo actual
+                        continue
+                    
                     if event_start < self.current_time < event_end:
                         event_start = self.current_time
-                
-                # Criterio flexible de solapamiento
-                if self._hay_solapamiento(event_start, event_end, self.start_date, self.end_date):
-                    filtered_events.append(event)
+                    
+                    if event_start.date() == self.start_date.date() or \
+                       (event_end.date() == self.start_date.date() + timedelta(days=1) and event_end.hour < 6):
+                        filtered_events.append(event)
+                        
+                        if self._is_night_event(event_start, event_end):
+                            night_events_count += 1
+                else:
+                    # Para múltiples días: verificar solapamiento
+                    # Extender búsqueda hasta el día siguiente temprano para eventos nocturnos
+                    extended_end = self.end_date + timedelta(hours=6)
+                    
+                    if self._hay_solapamiento(event_start, event_end, self.start_date, extended_end):
+                        filtered_events.append(event)
+                        
+                        if self._is_night_event(event_start, event_end):
+                            night_events_count += 1
             
             return filtered_events[:top_k]
             
         except Exception as e:
             # Fallback con criterio flexible
             events = Event.objects.filter(
-                Q(start_date__lte=self.end_date) & Q(end_date__gte=self.start_date)
+                Q(start_date__lte=self.end_date + timedelta(hours=6)) & 
+                Q(end_date__gte=self.start_date)
             )
             
             # Filtrar por hora actual si es same-day
-            if self.is_same_day and self.current_time:
+            if self.is_same_day:
                 events = events.filter(end_date__gte=self.current_time)
             
             if self.zone:
@@ -186,11 +290,14 @@ class ItineraryOptimizer:
             return list(events[:top_k])
     
     def _process_events(self, events, time_windows, activities_budget):
-        """Procesa eventos y los integra en la planificación"""
+        """
+        Procesa eventos incluyendo eventos nocturnos.
+        
+        Maneja correctamente eventos que cruzan medianoche
+        """
         scheduled_events = []
         remaining_budget = activities_budget
         
-        # No usamos used_windows para eventos porque tienen horarios fijos
         sorted_events = sorted(events, key=lambda x: x.start_date)
         
         for event in sorted_events:
@@ -201,8 +308,13 @@ class ItineraryOptimizer:
                 event_end = self._ensure_timezone_aware(event.end_date)
                 event_duration = (event_end - event_start).total_seconds() / 3600
                 
-                # Verificar si el evento ocurre durante el viaje (sin restricción de ventana)
-                if (event_start >= self.start_date and event_end <= self.end_date):
+                # Verificar si el evento está dentro del rango (con tolerancia para eventos nocturnos)
+                extended_end = self.end_date + timedelta(hours=6)
+                
+                if (event_start >= self.start_date and event_end <= extended_end):
+                    is_night = self._is_night_event(event_start, event_end)
+                    time_category = self._get_event_time_category(event_start, event_end)
+                    
                     scheduled_events.append({
                         'service': event,
                         'type': 'event',
@@ -211,7 +323,9 @@ class ItineraryOptimizer:
                         'start_time': event_start,
                         'end_time': event_end,
                         'duration_hours': event_duration,
-                        'es_fuera_de_horario': self._es_fuera_de_horario_normal(event_start, event_end)
+                        'is_night_event': is_night,
+                        'time_category': time_category,
+                        'crosses_midnight': event_end.date() > event_start.date()
                     })
                     remaining_budget -= event_cost
         
@@ -240,63 +354,179 @@ class ItineraryOptimizer:
         return None
     
     def _create_time_windows(self):
-        """Crea ventanas de tiempo para cada día"""
+        """
+        Crea ventanas de tiempo incluyendo horarios nocturnos.
+        
+        MEJORA: Ahora incluye:
+        - Ventanas nocturnas (22:00 - 24:00)
+        - Ventanas de madrugada (00:00 - 03:00) para eventos que cruzan medianoche
+        """
         time_windows = []
         
-        if self.is_same_day and self.current_time:
-            # Para same-day: crear ventanas desde la hora actual en adelante
-            current_time = self.current_time
-            current_hour = current_time.hour
+        if self.is_same_day:
+            # MISMO DÍA: Incluir ventanas nocturnas si aplica
+            current_hour = self.current_time.hour
+            day_date = self.current_time.date()
+            end_hour = self.end_date.hour
             
-            # Definir ventanas restantes del día
-            day_date = current_time.date()
-            
-            # Mañana (si aún es temprano)
-            if current_hour < 12:
-                start_morning = max(current_time, timezone.make_aware(datetime.combine(day_date, time(9, 0))))
-                time_windows.append((start_morning, timezone.make_aware(datetime.combine(day_date, time(12, 0)))))
+            # Mañana (9-12)
+            if current_hour < 12 and end_hour > 9:
+                start_morning = max(self.current_time, timezone.make_aware(datetime.combine(day_date, time(9, 0))))
+                end_morning = min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
+                if start_morning < end_morning:
+                    time_windows.append((start_morning, end_morning))
             
             # Almuerzo (12-14)
-            if current_hour < 14:
-                start_lunch = max(current_time, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
-                time_windows.append((start_lunch, timezone.make_aware(datetime.combine(day_date, time(14, 0)))))
+            if current_hour < 14 and end_hour > 12:
+                start_lunch = max(self.current_time, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
+                end_lunch = min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
+                if start_lunch < end_lunch:
+                    time_windows.append((start_lunch, end_lunch))
             
             # Tarde (14-18)
-            if current_hour < 18:
-                start_afternoon = max(current_time, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
-                time_windows.append((start_afternoon, timezone.make_aware(datetime.combine(day_date, time(18, 0)))))
+            if current_hour < 18 and end_hour > 14:
+                start_afternoon = max(self.current_time, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
+                end_afternoon = min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(18, 0))))
+                if start_afternoon < end_afternoon:
+                    time_windows.append((start_afternoon, end_afternoon))
             
-            # Noche (19-22)
-            if current_hour < 22:
-                start_evening = max(current_time, timezone.make_aware(datetime.combine(day_date, time(19, 0))))
-                time_windows.append((start_evening, timezone.make_aware(datetime.combine(day_date, time(22, 0)))))
+            # Noche temprana (19-22)
+            if current_hour < 22 and end_hour > 19:
+                start_evening = max(self.current_time, timezone.make_aware(datetime.combine(day_date, time(19, 0))))
+                end_evening = min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
+                if start_evening < end_evening:
+                    time_windows.append((start_evening, end_evening))
             
-            # Madrugada (22-24) - para eventos nocturnos
-            if current_hour < 24:
-                start_night = max(current_time, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
-                end_night = timezone.make_aware(datetime.combine(day_date + timedelta(days=1), time(2, 0)))  # Hasta las 2 AM
-                time_windows.append((start_night, end_night))
+            # Noche (22-24) - para eventos nocturnos
+            if current_hour < 24 and end_hour >= 22:
+                start_night = max(self.current_time, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
+                # Si el end_date cruza medianoche, extender hasta el día siguiente
+                if self.end_date.date() > day_date:
+                    end_night = self.end_date
+                else:
+                    end_night = timezone.make_aware(datetime.combine(day_date, time(23, 59)))
                 
+                if start_night < end_night:
+                    time_windows.append((start_night, end_night))
+            
+            # Madrugada (00:00-03:00) - solo si el viaje cruza medianoche
+            if self.end_date.date() > day_date or (current_hour >= 22 and end_hour < 6):
+                next_day = day_date + timedelta(days=1)
+                start_late_night = timezone.make_aware(datetime.combine(next_day, time(0, 0)))
+                end_late_night = min(self.end_date, timezone.make_aware(datetime.combine(next_day, time(3, 0))))
+                
+                if start_late_night < end_late_night:
+                    time_windows.append((start_late_night, end_late_night))
+        
         else:
-            # Para múltiples días: ventanas normales
-            for day in range(self.days):
-                day_date = self.start_date + timedelta(days=day)
-                day_date_date = day_date.date()
+            # MÚLTIPLES DÍAS: Incluir ventanas nocturnas en cada día
+            for day_offset in range(self.days):
+                current_day = self.start_date + timedelta(days=day_offset)
+                day_date = current_day.date()
                 
-                windows = [
-                    (timezone.make_aware(datetime.combine(day_date_date, time(9, 0))),
-                    timezone.make_aware(datetime.combine(day_date_date, time(12, 0)))),
+                is_first_day = (day_offset == 0)
+                is_last_day = (day_offset == self.days - 1)
+                
+                if is_first_day:
+                    # Primer día: ajustar según hora de inicio
+                    start_hour = self.start_date.hour
                     
-                    (timezone.make_aware(datetime.combine(day_date_date, time(12, 0))),
-                    timezone.make_aware(datetime.combine(day_date_date, time(14, 0)))),
+                    if start_hour < 12:
+                        time_windows.append((
+                            self.start_date,
+                            timezone.make_aware(datetime.combine(day_date, time(12, 0)))
+                        ))
                     
-                    (timezone.make_aware(datetime.combine(day_date_date, time(14, 0))),
-                    timezone.make_aware(datetime.combine(day_date_date, time(18, 0)))),
+                    if start_hour < 14:
+                        start_lunch = max(self.start_date, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
+                        time_windows.append((
+                            start_lunch,
+                            timezone.make_aware(datetime.combine(day_date, time(14, 0)))
+                        ))
                     
-                    (timezone.make_aware(datetime.combine(day_date_date, time(19, 0))),
-                    timezone.make_aware(datetime.combine(day_date_date, time(22, 0)))),
-                ]
-                time_windows.extend(windows)
+                    if start_hour < 18:
+                        start_afternoon = max(self.start_date, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
+                        time_windows.append((
+                            start_afternoon,
+                            timezone.make_aware(datetime.combine(day_date, time(18, 0)))
+                        ))
+                    
+                    if start_hour < 22:
+                        start_evening = max(self.start_date, timezone.make_aware(datetime.combine(day_date, time(19, 0))))
+                        time_windows.append((
+                            start_evening,
+                            timezone.make_aware(datetime.combine(day_date, time(22, 0)))
+                        ))
+                    
+                    # NUEVA: Ventana nocturna primer día
+                    if start_hour < 24:
+                        start_night = max(self.start_date, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
+                        next_day = day_date + timedelta(days=1)
+                        end_night = timezone.make_aware(datetime.combine(next_day, time(3, 0)))
+                        time_windows.append((start_night, end_night))
+                
+                elif is_last_day:
+                    # Último día: ajustar según hora de fin
+                    end_hour = self.end_date.hour
+                    
+                    # Si el último día empieza en madrugada (continuación de evento nocturno)
+                    if end_hour >= 0:
+                        early_morning_start = timezone.make_aware(datetime.combine(day_date, time(0, 0)))
+                        early_morning_end = min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(6, 0))))
+                        if early_morning_start < early_morning_end:
+                            time_windows.append((early_morning_start, early_morning_end))
+                    
+                    if end_hour > 9:
+                        time_windows.append((
+                            timezone.make_aware(datetime.combine(day_date, time(9, 0))),
+                            min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(12, 0))))
+                        ))
+                    
+                    if end_hour > 12:
+                        time_windows.append((
+                            timezone.make_aware(datetime.combine(day_date, time(12, 0))),
+                            min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(14, 0))))
+                        ))
+                    
+                    if end_hour > 14:
+                        time_windows.append((
+                            timezone.make_aware(datetime.combine(day_date, time(14, 0))),
+                            min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(18, 0))))
+                        ))
+                    
+                    if end_hour > 19:
+                        time_windows.append((
+                            timezone.make_aware(datetime.combine(day_date, time(19, 0))),
+                            min(self.end_date, timezone.make_aware(datetime.combine(day_date, time(22, 0))))
+                        ))
+                    
+                    # Ventana nocturna último día si aplica
+                    if end_hour >= 22 or self.end_date.date() > day_date:
+                        start_night = timezone.make_aware(datetime.combine(day_date, time(22, 0)))
+                        end_night = self.end_date
+                        if start_night < end_night:
+                            time_windows.append((start_night, end_night))
+                
+                else:
+                    # Días intermedios: ventanas completas incluidas nocturnas
+                    windows = [
+                        (timezone.make_aware(datetime.combine(day_date, time(9, 0))),
+                         timezone.make_aware(datetime.combine(day_date, time(12, 0)))),
+                        
+                        (timezone.make_aware(datetime.combine(day_date, time(12, 0))),
+                         timezone.make_aware(datetime.combine(day_date, time(14, 0)))),
+                        
+                        (timezone.make_aware(datetime.combine(day_date, time(14, 0))),
+                         timezone.make_aware(datetime.combine(day_date, time(18, 0)))),
+                        
+                        (timezone.make_aware(datetime.combine(day_date, time(19, 0))),
+                         timezone.make_aware(datetime.combine(day_date, time(22, 0)))),
+                        
+                        # Ventana nocturna (22:00 - 03:00 día siguiente)
+                        (timezone.make_aware(datetime.combine(day_date, time(22, 0))),
+                         timezone.make_aware(datetime.combine(day_date + timedelta(days=1), time(3, 0)))),
+                    ]
+                    time_windows.extend(windows)
         
         return time_windows
     
@@ -625,14 +855,18 @@ class ItineraryOptimizer:
         }
     
     def _identificar_ventanas_ocupadas_por_eventos(self, scheduled_events, time_windows):
-        """Identifica qué ventanas de tiempo están ocupadas por eventos"""
+        """
+        Identifica ventanas ocupadas considerando eventos nocturnos.
+        
+        Maneja correctamente eventos que cruzan medianoche
+        """
         used_windows = set()
         
         for event in scheduled_events:
             event_start = event['start_time']
             event_end = event['end_time']
             
-            # Buscar ventanas que se solapan con el evento
+            # Para eventos que cruzan medianoche, buscar en ambos días
             for i, (window_start, window_end) in enumerate(time_windows):
                 if self._hay_solapamiento(event_start, event_end, window_start, window_end):
                     used_windows.add(i)
