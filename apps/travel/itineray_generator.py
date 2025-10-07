@@ -1045,6 +1045,7 @@ class ItineraryValidator:
         
         # 2. Validar distribución temporal
         activities_by_day = {}
+        avg_activities = 0
         for item in items:
             if item['type'] in ['activity', 'event']:
                 day = item['date'].date()
