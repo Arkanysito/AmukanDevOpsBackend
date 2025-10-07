@@ -50,9 +50,19 @@ class TransportServiceSerializer(serializers.ModelSerializer):
         ]
 
 class EventSerializer(serializers.ModelSerializer):
+    organization_name = serializers.CharField(source='organization_id.name', read_only=True)
+    place_coordinates = serializers.CharField(source='place_id.coordinates', read_only=True)
     class Meta:
         model = Event
-        fields = ['name', 'description', 'start_date', 'end_date', 'price']
+        fields = [
+            'name', 
+            'organization_name', 
+            'description', 
+            'start_date', 
+            'end_date', 
+            'price', 
+            'place_coordinates'
+        ]
 
 class PlaceSerializer(serializers.ModelSerializer):
     organization_name = serializers.CharField(source='organization_id.name', read_only=True)
