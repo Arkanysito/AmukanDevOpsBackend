@@ -8,7 +8,7 @@ from apps.users.models import CustomUser
 from apps.core.constants import InteractionAction
 from apps.tracking.models import Interaction
 import json
-from .serializers import ItinerarySerializer
+from .serializers import ItinerarySerializer, ItineraryWithItemsSerializer
 from django.db import transaction
 from apps.travel.models import Itinerary, ItineraryItem, ItineraryCollaborator
 from django.contrib.contenttypes.models import ContentType
@@ -17,6 +17,7 @@ import logging
 from apps.core.constants import UserRole
 from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
 from apps.location.models import Place 
+from rest_framework import generics
 
 logger = logging.getLogger(__name__)
 
@@ -380,7 +381,6 @@ class SaveItineraryView(APIView):
         """Crea los items del itinerario usando tus modelos reales"""
         items_creados = []
         
-        # Mapeo CORRECTO según tus modelos
         service_type_mapping = {
             'hospedaje': {
                 'content_type_model': 'accommodationservice',
@@ -410,18 +410,13 @@ class SaveItineraryView(APIView):
         }
         
         servicios = itinerario_data.get('servicios', {})
-        total_items = sum(len(items) for items in servicios.values())
-        logger.info(f"📦 Procesando {total_items} items de servicios")
         
         for servicio_tipo, items_servicio in servicios.items():
-            logger.info(f"🔧 Procesando {len(items_servicio)} items de {servicio_tipo}")
-            
             service_config = service_type_mapping.get(servicio_tipo)
             if not service_config:
                 logger.warning(f"⚠️ Tipo de servicio no mapeado: {servicio_tipo}")
                 continue
             
-            # Obtener el content_type una sola vez por tipo de servicio
             try:
                 content_type = ContentType.objects.get(model=service_config['content_type_model'])
             except ContentType.DoesNotExist:
@@ -451,7 +446,7 @@ class SaveItineraryView(APIView):
                     )
                     
                     items_creados.append(item)
-                    logger.info(f"✅ Item {idx+1} de {servicio_tipo} guardado: {item_data.get('nombre', 'Sin nombre')}")
+                    logger.info(f"✅ Item guardado: {item_data.get('nombre', 'Sin nombre')} - ObjectID: {object_id}")
                     
                 except Exception as e:
                     logger.error(f"❌ Error guardando item {idx} de {servicio_tipo}: {str(e)}")
@@ -460,48 +455,39 @@ class SaveItineraryView(APIView):
         logger.info(f"🎉 Total de items guardados: {len(items_creados)}")
         return items_creados
     
+
+    
     def _find_service_object_id(self, item_data, service_config):
         """
-        Busca el ID real del objeto en la base de datos según el tipo de servicio
+        Busca o determina el object_id para el servicio.
+        IMPORTANTE: El mismo servicio puede estar en múltiples itinerarios.
         """
         model_class = service_config['model_class']
         id_field = service_config['id_field']
         
         try:
-            # Intentar buscar por ID si está presente en los datos
+            # DEBUG: Ver qué datos tenemos
+            logger.info(f"🔍 Buscando object_id para: {item_data.get('nombre', 'Sin nombre')}")
+            logger.info(f"   ID en datos: {item_data.get('id', 'No disponible')}")
+            
+            # OPCIÓN 1: Usar el ID proporcionado en los datos (si es UUID válido)
             if 'id' in item_data and item_data['id']:
                 try:
-                    # Si el ID es un UUID válido, buscar directamente
-                    service_uuid = uuid.UUID(item_data['id'])
-                    obj = model_class.objects.get(**{id_field: service_uuid})
-                    return obj.pk
-                except (ValueError, AttributeError):
-                    # Si no es UUID válido, buscar por nombre
-                    pass
-                except model_class.DoesNotExist:
-                    # Si no existe con ese UUID, buscar por nombre
-                    pass
-            
-            # Buscar por nombre (fallback)
-            if 'nombre' in item_data:
-                obj = model_class.objects.filter(name=item_data['nombre']).first()
-                if obj:
-                    return obj.pk
-            
-            # Si no se encuentra, crear un objeto temporal o usar uno existente
-            # Por ahora, usaremos el primer objeto disponible del tipo
-            obj = model_class.objects.first()
-            if obj:
-                logger.warning(f"⚠️ Usando objeto temporal para: {item_data.get('nombre', 'Sin nombre')}")
-                return obj.pk
-            
-            # Si no hay objetos del tipo, generar un UUID temporal
-            logger.error(f"❌ No hay objetos de {model_class.__name__} en la base de datos")
-            return uuid.uuid4()
+                    service_uuid = uuid.UUID(str(item_data['id']))
+                    # VERIFICAR que el servicio existe en la base de datos
+                    if model_class.objects.filter(**{id_field: service_uuid}).exists():
+                        logger.info(f"   ✅ Usando UUID existente: {service_uuid}")
+                        return service_uuid
+                    else:
+                        logger.warning(f"   ⚠️ UUID no existe en BD, pero lo usaremos: {service_uuid}")
+                        return service_uuid
+                except (ValueError, AttributeError) as e:
+                    logger.warning(f"   ❌ UUID inválido: {e}")
             
         except Exception as e:
-            logger.error(f"❌ Error buscando object_id: {str(e)}")
-            return None
+            logger.error(f"❌ Error en _find_service_object_id: {str(e)}")
+            # Fallback: generar UUID
+            return uuid.uuid4()
     
     def _parse_date(self, date_string):
         """Convierte string de fecha a datetime object"""
@@ -515,3 +501,92 @@ class SaveItineraryView(APIView):
                 return datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
         except (ValueError, TypeError):
             return datetime.now()
+
+class UserItinerariesView(generics.ListAPIView):
+    """Obtiene todos los itinerarios del usuario autenticado"""
+    serializer_class = ItineraryWithItemsSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Itinerary.objects.none()
+        
+        # Obtener itinerarios donde el usuario es colaborador
+        collaborator_itineraries = ItineraryCollaborator.objects.filter(
+            user_id=user
+        ).values_list('itinerary_id', flat=True)
+        
+        # Usar prefetch_related con el nombre correcto
+        return Itinerary.objects.filter(
+            itinerary_id__in=collaborator_itineraries
+        ).prefetch_related(
+            'itineraryitem_set',  # ← ESTA ES LA CLAVE
+            'itineraryitem_set__content_type'
+        ).order_by('-created_at')
+
+class ItineraryDetailView(generics.RetrieveAPIView):
+    """Obtiene el detalle de un itinerario específico"""
+    serializer_class = ItineraryWithItemsSerializer
+    
+    def get_queryset(self):
+        user = self.request.user
+        if not user.is_authenticated:
+            return Itinerary.objects.none()
+        
+        collaborator_itineraries = ItineraryCollaborator.objects.filter(
+            user_id=user
+        ).values_list('itinerary_id', flat=True)
+        
+        # Prefetch optimizado
+        return Itinerary.objects.filter(
+            itinerary_id__in=collaborator_itineraries
+        ).prefetch_related(
+            'itineraryitem_set',
+            'itineraryitem_set__content_type'
+        )
+    
+    lookup_field = 'itinerary_id'
+
+# agregar temporalmente
+class DebugItineraryView(APIView):
+    def get(self, request, itinerary_id):
+        """Vista temporal para debuggear un itinerario específico"""
+        try:
+            itinerary = Itinerary.objects.get(itinerary_id=itinerary_id)
+            
+            # Obtener items manualmente
+            items = ItineraryItem.objects.filter(itinerary_id=itinerary)
+            
+            debug_data = {
+                'itinerary': {
+                    'id': str(itinerary.itinerary_id),
+                    'name': itinerary.name,
+                    'items_count': items.count()
+                },
+                'items': []
+            }
+            
+            for item in items:
+                item_data = {
+                    'item_id': str(item.item_id),
+                    'content_type': item.content_type.model,
+                    'object_id': str(item.object_id),
+                    'scheduled_date': item.scheduled_date.isoformat(),
+                    'estimated_cost': float(item.estimated_cost)
+                }
+                
+                # Intentar obtener el objeto relacionado
+                try:
+                    if item.reservable:
+                        item_data['service_name'] = getattr(item.reservable, 'name', 'No name')
+                    else:
+                        item_data['service_name'] = 'Reservable is None'
+                except Exception as e:
+                    item_data['service_name'] = f'Error: {str(e)}'
+                
+                debug_data['items'].append(item_data)
+            
+            return Response(debug_data)
+            
+        except Itinerary.DoesNotExist:
+            return Response({'error': 'Itinerario no encontrado'}, status=404)
