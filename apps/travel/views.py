@@ -18,6 +18,7 @@ from apps.core.constants import UserRole
 from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
 from apps.location.models import Place 
 from rest_framework import generics
+from django.db.models import Prefetch
 
 logger = logging.getLogger(__name__)
 
@@ -511,17 +512,18 @@ class UserItinerariesView(generics.ListAPIView):
         if not user.is_authenticated:
             return Itinerary.objects.none()
         
-        # Obtener itinerarios donde el usuario es colaborador
         collaborator_itineraries = ItineraryCollaborator.objects.filter(
             user_id=user
         ).values_list('itinerary_id', flat=True)
         
-        # Usar prefetch_related con el nombre correcto
+        # OPTIMIZACIÓN: Usar Prefetch con select_related para coordenadas
         return Itinerary.objects.filter(
             itinerary_id__in=collaborator_itineraries
         ).prefetch_related(
-            'itineraryitem_set',  # ← ESTA ES LA CLAVE
-            'itineraryitem_set__content_type'
+            Prefetch(
+                'itineraryitem_set',
+                queryset=ItineraryItem.objects.select_related('content_type')
+            )
         ).order_by('-created_at')
 
 class ItineraryDetailView(generics.RetrieveAPIView):
@@ -537,12 +539,14 @@ class ItineraryDetailView(generics.RetrieveAPIView):
             user_id=user
         ).values_list('itinerary_id', flat=True)
         
-        # Prefetch optimizado
+        # OPTIMIZACIÓN MEJORADA para el detalle
         return Itinerary.objects.filter(
             itinerary_id__in=collaborator_itineraries
         ).prefetch_related(
-            'itineraryitem_set',
-            'itineraryitem_set__content_type'
+            Prefetch(
+                'itineraryitem_set',
+                queryset=ItineraryItem.objects.select_related('content_type')
+            )
         )
     
     lookup_field = 'itinerary_id'
