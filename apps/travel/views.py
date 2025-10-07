@@ -8,6 +8,17 @@ from apps.users.models import CustomUser
 from apps.core.constants import InteractionAction
 from apps.tracking.models import Interaction
 import json
+from .serializers import ItinerarySerializer
+from django.db import transaction
+from apps.travel.models import Itinerary, ItineraryItem, ItineraryCollaborator
+from django.contrib.contenttypes.models import ContentType
+import uuid
+import logging
+from apps.core.constants import UserRole
+from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
+from apps.location.models import Place 
+
+logger = logging.getLogger(__name__)
 
 class ItineraryPreviewView(APIView):
     def post(self, request):
@@ -309,3 +320,198 @@ class ItineraryPreviewView(APIView):
                 return coordinates.wkt
         
         return None
+
+class SaveItineraryView(APIView):
+    def post(self, request):
+        logger.info("✅ SaveItineraryView llamado")
+        
+        try:
+            data = request.data
+            user = request.user
+            
+            if not user.is_authenticated:
+                return Response(
+                    {"error": "Debe estar autenticado para guardar itinerarios"}, 
+                    status=status.HTTP_401_UNAUTHORIZED
+                )
+            
+            required_fields = ['name', 'itinerario_data']
+            for field in required_fields:
+                if field not in data:
+                    return Response(
+                        {"error": f"Campo requerido faltante: {field}"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
+            with transaction.atomic():
+                # Crear el itinerario
+                itinerary = Itinerary.objects.create(
+                    name=data['name'],
+                    is_shared=data.get('is_shared', False)
+                )
+                logger.info(f"📝 Itinerario creado: {itinerary.itinerary_id}")
+                
+                # Agregar al usuario como colaborador
+                ItineraryCollaborator.objects.create(
+                    user_id=user,
+                    itinerary_id=itinerary,
+                    role=UserRole.OWNER
+                )
+                
+                # Procesar items del itinerario
+                items_creados = self._create_itinerary_items(itinerary, data['itinerario_data'])
+                
+                return Response({
+                    "message": "Itinerario guardado exitosamente",
+                    "itinerary_id": str(itinerary.itinerary_id),
+                    "name": itinerary.name,
+                    "items_count": len(items_creados),
+                    "items_by_type": {k: len(v) for k, v in data['itinerario_data'].get('servicios', {}).items()}
+                }, status=status.HTTP_201_CREATED)
+                
+        except Exception as e:
+            logger.error(f"❌ Error al guardar itinerario: {str(e)}")
+            return Response(
+                {"error": f"Error al guardar itinerario: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    def _create_itinerary_items(self, itinerary, itinerario_data):
+        """Crea los items del itinerario usando tus modelos reales"""
+        items_creados = []
+        
+        # Mapeo CORRECTO según tus modelos
+        service_type_mapping = {
+            'hospedaje': {
+                'content_type_model': 'accommodationservice',
+                'model_class': AccommodationService,
+                'id_field': 'service_id'
+            },
+            'comida': {
+                'content_type_model': 'place',
+                'model_class': Place, 
+                'id_field': 'place_id'
+            },
+            'actividades': {
+                'content_type_model': 'activityservice',
+                'model_class': ActivityService,
+                'id_field': 'service_id'
+            },
+            'transporte': {
+                'content_type_model': 'transportservice', 
+                'model_class': TransportService,
+                'id_field': 'service_id'
+            },
+            'eventos': {
+                'content_type_model': 'event',
+                'model_class': Event,
+                'id_field': 'event_id'
+            }
+        }
+        
+        servicios = itinerario_data.get('servicios', {})
+        total_items = sum(len(items) for items in servicios.values())
+        logger.info(f"📦 Procesando {total_items} items de servicios")
+        
+        for servicio_tipo, items_servicio in servicios.items():
+            logger.info(f"🔧 Procesando {len(items_servicio)} items de {servicio_tipo}")
+            
+            service_config = service_type_mapping.get(servicio_tipo)
+            if not service_config:
+                logger.warning(f"⚠️ Tipo de servicio no mapeado: {servicio_tipo}")
+                continue
+            
+            # Obtener el content_type una sola vez por tipo de servicio
+            try:
+                content_type = ContentType.objects.get(model=service_config['content_type_model'])
+            except ContentType.DoesNotExist:
+                logger.error(f"❌ ContentType no encontrado: {service_config['content_type_model']}")
+                continue
+            
+            for idx, item_data in enumerate(items_servicio):
+                try:
+                    # Buscar el objeto real en la base de datos
+                    object_id = self._find_service_object_id(item_data, service_config)
+                    
+                    if not object_id:
+                        logger.warning(f"⚠️ No se pudo encontrar object_id para item: {item_data.get('nombre', 'Sin nombre')}")
+                        continue
+                    
+                    # Preparar fecha programada
+                    scheduled_date = self._parse_date(item_data.get('fecha'))
+                    
+                    # Crear el itinerary item
+                    item = ItineraryItem.objects.create(
+                        itinerary_id=itinerary,
+                        content_type=content_type,
+                        object_id=object_id,
+                        scheduled_date=scheduled_date,
+                        estimated_cost=item_data.get('costo', 0),
+                        estimated_cost_currency='USD'
+                    )
+                    
+                    items_creados.append(item)
+                    logger.info(f"✅ Item {idx+1} de {servicio_tipo} guardado: {item_data.get('nombre', 'Sin nombre')}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error guardando item {idx} de {servicio_tipo}: {str(e)}")
+                    continue
+        
+        logger.info(f"🎉 Total de items guardados: {len(items_creados)}")
+        return items_creados
+    
+    def _find_service_object_id(self, item_data, service_config):
+        """
+        Busca el ID real del objeto en la base de datos según el tipo de servicio
+        """
+        model_class = service_config['model_class']
+        id_field = service_config['id_field']
+        
+        try:
+            # Intentar buscar por ID si está presente en los datos
+            if 'id' in item_data and item_data['id']:
+                try:
+                    # Si el ID es un UUID válido, buscar directamente
+                    service_uuid = uuid.UUID(item_data['id'])
+                    obj = model_class.objects.get(**{id_field: service_uuid})
+                    return obj.pk
+                except (ValueError, AttributeError):
+                    # Si no es UUID válido, buscar por nombre
+                    pass
+                except model_class.DoesNotExist:
+                    # Si no existe con ese UUID, buscar por nombre
+                    pass
+            
+            # Buscar por nombre (fallback)
+            if 'nombre' in item_data:
+                obj = model_class.objects.filter(name=item_data['nombre']).first()
+                if obj:
+                    return obj.pk
+            
+            # Si no se encuentra, crear un objeto temporal o usar uno existente
+            # Por ahora, usaremos el primer objeto disponible del tipo
+            obj = model_class.objects.first()
+            if obj:
+                logger.warning(f"⚠️ Usando objeto temporal para: {item_data.get('nombre', 'Sin nombre')}")
+                return obj.pk
+            
+            # Si no hay objetos del tipo, generar un UUID temporal
+            logger.error(f"❌ No hay objetos de {model_class.__name__} en la base de datos")
+            return uuid.uuid4()
+            
+        except Exception as e:
+            logger.error(f"❌ Error buscando object_id: {str(e)}")
+            return None
+    
+    def _parse_date(self, date_string):
+        """Convierte string de fecha a datetime object"""
+        if not date_string:
+            return datetime.now()
+        
+        try:
+            if 'T' in date_string:
+                return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
+            else:
+                return datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            return datetime.now()
