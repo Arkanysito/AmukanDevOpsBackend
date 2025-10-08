@@ -59,7 +59,8 @@ class InteractionAction(models.TextChoices):
     SHARE = 'SHARE', 'Share'
     LIKE = 'LIKE', 'Like'
     COMMENT = 'COMMENT', 'Comment',
-    SEARCH = 'SEARCH', 'Search'
+    SEARCH = 'SEARCH', 'Search',
+    SAVE_ITINERARY = 'save_itinerary', 'Guardado de Itinerario'
 
 class SubscriptionPlan(models.TextChoices):
     FREE = 'FREE', 'Free'

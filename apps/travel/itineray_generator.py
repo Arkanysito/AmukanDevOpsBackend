@@ -19,7 +19,11 @@ class ItineraryOptimizer:
         self.budget = budget
         self.travelers = travelers
         self.preferences = preferences or {}
-
+        
+        # Extraer experiencias y tipo de usuario específicamente
+        self.experiencias = self.preferences.get('experiencias', [])
+        self.tipo_usuario = self.preferences.get('tipo_usuario')
+        
         # Detectar si es same-day (mismo día)
         self.current_time = timezone.now()
         self.is_same_day = self.start_date.date() == self.end_date.date()
@@ -54,7 +58,9 @@ class ItineraryOptimizer:
             'candidate_activities': 0,
             'selected_activities': 0,
             'budget_efficiency': 0,
-            'time_efficiency': 0
+            'time_efficiency': 0,
+            'experiencias_used': self.experiencias,
+            'tipo_usuario': self.tipo_usuario
         }
         
     # Cache simple en memoria para coordenadas
@@ -186,21 +192,223 @@ class ItineraryOptimizer:
             return 'multi_period'
     
     def _get_activities_with_scores(self, top_k=50):
-        """Obtiene actividades con sus scores de recomendación"""
+        """Obtiene actividades con sus scores de recomendación, considerando experiencias"""
         try:
             activities = recommend_places(self.user, 'activity', self.zone, top_k=top_k)
             if activities and isinstance(activities[0], tuple):
                 self.performance_metrics['candidate_activities'] = len(activities)
-                return activities
+                
+                # Ajustar scores basado en experiencias del usuario
+                adjusted_activities = []
+                for activity, score in activities:
+                    adjusted_score = self._adjust_score_by_experiencias(activity, float(score))
+                    adjusted_activities.append((activity, adjusted_score))
+                
+                return adjusted_activities
             else:
-                return [(act, 0.5) for act in activities]
+                activities_with_scores = []
+                for act in activities:
+                    adjusted_score = self._adjust_score_by_experiencias(act, 0.5)
+                    activities_with_scores.append((act, adjusted_score))
+                self.performance_metrics['candidate_activities'] = len(activities_with_scores)
+                return activities_with_scores
         except:
             activities = ActivityService.objects.all()
             if self.zone:
                 activities = activities.filter(place_id__zone_id=self.zone)
-            result = [(act, 0.5) for act in activities[:top_k]]
+            
+            # Aplicar ajuste por experiencias incluso en fallback
+            result = []
+            for act in activities[:top_k]:
+                adjusted_score = self._adjust_score_by_experiencias(act, 0.5)
+                result.append((act, adjusted_score))
+            
             self.performance_metrics['candidate_activities'] = len(result)
             return result
+    
+    def _adjust_score_by_experiencias(self, activity, base_score):
+        """
+        Ajusta el score de una actividad basado en las experiencias seleccionadas
+        """
+        if not self.experiencias:
+            return base_score
+        
+        adjusted_score = base_score
+        activity_categories = self._get_activity_categories(activity)
+        
+        # Mapeo de experiencias a categorías de actividades
+        experiencia_to_categories = {
+            'Aventura': ['adventure', 'sports', 'outdoor', 'extreme', 'hiking', 'climbing'],
+            'Cultura': ['cultural', 'museum', 'historical', 'art', 'heritage', 'architecture'],
+            'Gastronomía': ['gastronomy', 'food', 'wine', 'culinary', 'cooking', 'tasting'],
+            'Relax': ['relaxation', 'spa', 'wellness', 'leisure', 'yoga', 'meditation'],
+            'Naturaleza': ['nature', 'ecotourism', 'wildlife', 'park', 'garden', 'beach'],
+            'Urbano': ['urban', 'shopping', 'entertainment', 'city', 'nightlife', 'theater'],
+            'Familiar': ['family', 'kids', 'amusement', 'educational', 'playground', 'zoo'],
+            'Romántico': ['romantic', 'luxury', 'couples', 'intimate', 'scenic', 'viewpoint']
+        }
+        
+        # Verificar coincidencia con experiencias
+        for experiencia in self.experiencias:
+            if experiencia in experiencia_to_categories:
+                categories_for_experiencia = experiencia_to_categories[experiencia]
+                # Si la actividad coincide con alguna categoría de la experiencia, aumentar score
+                if any(cat in activity_categories for cat in categories_for_experiencia):
+                    adjusted_score *= 1.3  # 30% de bonus por coincidencia
+                    break  # Solo aplicar un bonus por actividad
+        
+        return min(adjusted_score, 1.0)  # Máximo 1.0
+    
+    def _get_activity_categories(self, activity):
+        """
+        Extrae categorías de una actividad para matching con experiencias
+        """
+        categories = []
+        
+        # Intentar obtener categorías de diferentes formas
+        if hasattr(activity, 'category'):
+            categories.append(activity.category.lower())
+        
+        if hasattr(activity, 'tags'):
+            if isinstance(activity.tags, list):
+                categories.extend([tag.lower() for tag in activity.tags])
+            elif isinstance(activity.tags, str):
+                categories.extend([tag.strip().lower() for tag in activity.tags.split(',')])
+        
+        if hasattr(activity, 'name'):
+            name_lower = activity.name.lower()
+            # Búsqueda de palabras clave en el nombre
+            keyword_mapping = {
+                'aventura': 'adventure',
+                'cultura': 'cultural', 
+                'gastronomía': 'gastronomy',
+                'relax': 'relaxation',
+                'naturaleza': 'nature',
+                'urbano': 'urban',
+                'familiar': 'family',
+                'romántico': 'romantic'
+            }
+            
+            for spanish, english in keyword_mapping.items():
+                if spanish in name_lower:
+                    categories.append(english)
+        
+        return categories
+    
+    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, restaurants, events, time_windows):
+        """
+        Genera un itinerario para una estrategia específica, considerando tipo de usuario
+        """
+        # AJUSTAR ESTRATEGIA SEGÚN TIPO DE USUARIO
+        effective_strategy = self._adjust_strategy_by_tipo_usuario(strategy)
+        
+        items = []
+        total_cost = 0
+        
+        # 1. Seleccionar alojamiento (ajustado por tipo de usuario)
+        if self.days > 1 and accommodations:
+            acc = self._select_accommodation(effective_strategy, accommodations)
+            if acc:
+                acc_cost = float(acc.price) * (self.days - 1) * self.travelers
+                items.append({
+                    'service': acc,
+                    'type': 'accommodation',
+                    'cost': acc_cost,
+                    'date': self.start_date,
+                    'duration_days': self.days - 1
+                })
+                total_cost += acc_cost
+        
+        # 2. Planificar comidas (ajustado por tipo de usuario)
+        meal_budget = self.budget * self._get_meal_budget_ratio_by_tipo_usuario()
+        meal_plan = self._plan_meals(restaurants, effective_strategy, meal_budget)
+        for meal in meal_plan:
+            if total_cost + meal['cost'] <= self.budget:
+                items.append(meal)
+                total_cost += meal['cost']
+        
+        # 3. Presupuesto restante para actividades y eventos
+        activities_events_budget = self.budget - total_cost
+        
+        # 4. PRIMERO: Procesar eventos (priorizando eventos que coincidan con experiencias)
+        scheduled_events, remaining_budget, _ = self._process_events(
+            events, time_windows, activities_events_budget
+        )
+        
+        for event in scheduled_events:
+            items.append(event)
+            total_cost += event['cost']
+        
+        # 5. Identificar ventanas ocupadas por eventos
+        used_windows_for_events = self._identificar_ventanas_ocupadas_por_eventos(scheduled_events, time_windows)
+        
+        # 6. LUEGO: Resolver Problema de Orientación para actividades (con experiencias)
+        available_time_windows = [
+            window for i, window in enumerate(time_windows) 
+            if i not in used_windows_for_events
+        ]
+        
+        selected_activities = self.solve_orienteeering_problem(
+            activities_with_scores, available_time_windows, remaining_budget
+        )
+        
+        # 7. Asignar actividades a ventanas de tiempo disponibles
+        scheduled_activities = self._schedule_activities(selected_activities, available_time_windows)
+        
+        for activity in scheduled_activities:
+            if total_cost + activity['cost'] <= self.budget:
+                items.append(activity)
+                total_cost += activity['cost']
+        
+        return {
+            'items': items,
+            'total_cost': total_cost,
+            'strategy': effective_strategy,
+            'original_strategy': strategy,
+            'budget_utilization': total_cost / self.budget if self.budget > 0 else 0,
+            'experiencias_applied': self.experiencias,
+            'tipo_usuario_used': self.tipo_usuario
+        }
+    
+    def _adjust_strategy_by_tipo_usuario(self, original_strategy):
+        """
+        Ajusta la estrategia basada en el tipo de usuario
+        """
+        if not self.tipo_usuario:
+            return original_strategy
+        
+        strategy_adjustments = {
+            'mochilero': 'budget',
+            'económico': 'budget', 
+            'turista': 'balanced',
+            'premium': 'premium',
+            'lujo': 'premium',
+            'aventurero': 'balanced',
+            'cultural': 'balanced',
+            'familiar': 'balanced'
+        }
+        
+        return strategy_adjustments.get(self.tipo_usuario.lower(), original_strategy)
+    
+    def _get_meal_budget_ratio_by_tipo_usuario(self):
+        """
+        Define el ratio de presupuesto para comidas según tipo de usuario
+        """
+        if not self.tipo_usuario:
+            return 0.3  # Default
+        
+        meal_ratios = {
+            'mochilero': 0.2,
+            'económico': 0.25,
+            'turista': 0.3,
+            'premium': 0.35,
+            'lujo': 0.4,
+            'aventurero': 0.25,
+            'cultural': 0.3,
+            'familiar': 0.35
+        }
+        
+        return meal_ratios.get(self.tipo_usuario.lower(), 0.3)
     
     def _get_accommodations(self, top_k=10):
         """Obtiene alojamientos"""
@@ -1018,7 +1226,7 @@ class ItineraryOptimizer:
         return scheduled
 
 
-# MEJORA 9: Sistema de validación de itinerarios
+# Sistema de validación de itinerarios
 class ItineraryValidator:
     """Valida la calidad y viabilidad de los itinerarios generados"""
     
@@ -1219,9 +1427,10 @@ def analyze_budget_sensitivity(optimizer, budget_variations=[0.8, 1.0, 1.2]):
     return results
 
 
-# Función principal mejorada
+# Función principal
 def generate_optimized_itineraries(request, destination, start_date, end_date, 
                                   budget, travelers, preferences=None, 
+                                  experiencias=None, tipo_usuario=None,
                                   include_analytics=False):
     """
     Función principal para generar itinerarios optimizados con analytics opcionales
@@ -1234,11 +1443,29 @@ def generate_optimized_itineraries(request, destination, start_date, end_date,
         budget: Presupuesto total
         travelers: Número de viajeros
         preferences: Preferencias del usuario (opcional)
+        experiencias: Lista de experiencias seleccionadas (opcional)
+        tipo_usuario: Tipo de usuario seleccionado (opcional)
         include_analytics: Si True, incluye reporte de optimización
     
     Returns:
         Dict con itinerarios y analytics opcionales
     """
+    
+    # INTEGRAR EXPERIENCIAS Y TIPO DE USUARIO EN LAS PREFERENCIAS
+    enhanced_preferences = preferences.copy() if preferences else {}
+    
+    # Agregar experiencias a las preferencias
+    if experiencias:
+        enhanced_preferences['experiencias'] = experiencias
+        # También mapear experiencias a categorías para el sistema de recomendación
+        enhanced_preferences['categories'] = _map_experiencias_to_categories(experiencias)
+    
+    # Agregar tipo de usuario a las preferencias
+    if tipo_usuario:
+        enhanced_preferences['tipo_usuario'] = tipo_usuario
+        # Ajustar estrategia basada en el tipo de usuario
+        enhanced_preferences['strategy_weights'] = _get_strategy_weights_by_tipo_usuario(tipo_usuario)
+    
     optimizer = ItineraryOptimizer(
         user=request.user if request.user.is_authenticated else None,
         destination=destination,
@@ -1246,7 +1473,7 @@ def generate_optimized_itineraries(request, destination, start_date, end_date,
         end_date=end_date,
         budget=budget,
         travelers=travelers,
-        preferences=preferences or {}
+        preferences=enhanced_preferences 
     )
     
     itineraries = optimizer.generate_optimized_itineraries(max_itineraries=3)
@@ -1263,7 +1490,7 @@ def generate_optimized_itineraries(request, destination, start_date, end_date,
     # Comparar itinerarios
     comparison = ItineraryComparator.compare_itineraries(
         validated_itineraries, 
-        preferences.get('priorities') if preferences else None
+        enhanced_preferences.get('priorities') 
     )
     
     result = {
@@ -1276,6 +1503,58 @@ def generate_optimized_itineraries(request, destination, start_date, end_date,
     if include_analytics:
         result['analytics'] = {
             'optimization_report': optimizer.get_optimization_report(),
-            'budget_sensitivity': analyze_budget_sensitivity(optimizer)
+            'budget_sensitivity': analyze_budget_sensitivity(optimizer),
+            'user_profile_used': {
+                'experiencias': experiencias,
+                'tipo_usuario': tipo_usuario
+            }
         }
     return result
+
+# FUNCIONES AUXILIARES PARA MANEJAR EXPERIENCIAS Y TIPO DE USUARIO
+
+def _map_experiencias_to_categories(experiencias):
+    """
+    Mapea experiencias a categorías de actividades para el sistema de recomendación
+    """
+    experiencia_to_categories = {
+        'Aventura': ['adventure', 'sports', 'outdoor', 'extreme'],
+        'Cultura': ['cultural', 'museum', 'historical', 'art'],
+        'Gastronomía': ['gastronomy', 'food', 'wine', 'culinary'],
+        'Relax': ['relaxation', 'spa', 'wellness', 'leisure'],
+        'Naturaleza': ['nature', 'ecotourism', 'hiking', 'wildlife'],
+        'Urbano': ['urban', 'shopping', 'entertainment', 'city'],
+        'Familiar': ['family', 'kids', 'amusement', 'educational'],
+        'Romántico': ['romantic', 'luxury', 'couples', 'intimate']
+    }
+    
+    categories = set()
+    for experiencia in experiencias:
+        if experiencia in experiencia_to_categories:
+            categories.update(experiencia_to_categories[experiencia])
+    
+    return list(categories)
+
+def _get_strategy_weights_by_tipo_usuario(tipo_usuario):
+    """
+    Define pesos de estrategia basados en el tipo de usuario
+    """
+    strategy_weights = {
+        'budget': 0.33,
+        'balanced': 0.34,
+        'premium': 0.33
+    }
+    
+    # Ajustar pesos según el tipo de usuario
+    tipo_usuario_weights = {
+        'mochilero': {'budget': 0.6, 'balanced': 0.3, 'premium': 0.1},
+        'económico': {'budget': 0.5, 'balanced': 0.4, 'premium': 0.1},
+        'turista': {'budget': 0.3, 'balanced': 0.5, 'premium': 0.2},
+        'premium': {'budget': 0.1, 'balanced': 0.3, 'premium': 0.6},
+        'lujo': {'budget': 0.05, 'balanced': 0.25, 'premium': 0.7},
+        'aventurero': {'budget': 0.4, 'balanced': 0.4, 'premium': 0.2},
+        'cultural': {'budget': 0.3, 'balanced': 0.5, 'premium': 0.2},
+        'familiar': {'budget': 0.2, 'balanced': 0.6, 'premium': 0.2}
+    }
+    
+    return tipo_usuario_weights.get(tipo_usuario.lower() if tipo_usuario else '', strategy_weights)
