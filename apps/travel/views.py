@@ -31,6 +31,8 @@ class ItineraryPreviewView(APIView):
         presupuesto = data.get("presupuesto", 0)
         cantidad_personas = data.get("cantidad_personas", 1)
         preferences = data.get("preferences", {})
+        experiencias = data.get("experiencias", [])
+        tipo_usuario = data.get("tipo_usuario")
 
         # Validaciones
         if not all([destino, desde, hasta]):
@@ -53,31 +55,38 @@ class ItineraryPreviewView(APIView):
 
         # Generar itinerarios optimizados
         itinerarios = generate_optimized_itineraries(
-            request, destino, desde, hasta, presupuesto, cantidad_personas, preferences
+            request=request,
+            destination=destino,
+            start_date=desde,
+            end_date=hasta,
+            budget=presupuesto,
+            travelers=cantidad_personas,
+            preferences=preferences,
+            experiencias=experiencias,
+            tipo_usuario=tipo_usuario
         )
 
-        # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS
-        self._save_search_interaction(request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios)
+        # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS (incluyendo experiencias)
+        self._save_search_interaction(
+            request, destino, desde, hasta, presupuesto, cantidad_personas, 
+            preferences, itinerarios, experiencias, tipo_usuario
+        )
 
-        if not itinerarios:
+        if not itinerarios.get('itineraries'):
             return Response({
                 "message": "No se pudo generar un itinerario con los parámetros dados",
                 "suggestion": "Intente con un destino diferente o verifique la disponibilidad de servicios"
             }, status=status.HTTP_204_NO_CONTENT)
 
-        # Asegurarse de que tenemos la estructura correcta
-        if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
-            response_data = self._format_itineraries_for_frontend(itinerarios, destino, desde, hasta, cantidad_personas)
-        else:
-            # Si viene en otro formato, crear la estructura esperada
-            response_data = self._format_itineraries_for_frontend(
-                {'itineraries': itinerarios}, destino, desde, hasta, cantidad_personas
-            )
+        # Formatear respuesta para el frontend
+        response_data = self._format_itineraries_for_frontend(
+            itinerarios, destino, desde, hasta, cantidad_personas
+        )
         
         return Response(response_data, status=status.HTTP_200_OK)
 
-    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios):
-        """Guarda la búsqueda en la base de datos como una interacción"""
+    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios, experiencias=None, tipo_usuario=None):
+        """Guarda la búsqueda en la base de datos como una interacción (incluye experiencias)"""
         try:
             # Obtener información del usuario y sesión
             user = request.user if request.user.is_authenticated else None
@@ -91,7 +100,9 @@ class ItineraryPreviewView(APIView):
                     'hasta': hasta.isoformat() if hasattr(hasta, 'isoformat') else str(hasta),
                     'presupuesto': presupuesto,
                     'cantidad_personas': cantidad_personas,
-                    'preferences': preferences
+                    'preferences': preferences,
+                    'experiencias': experiencias or [],  # ✅ Nuevo: incluir experiencias
+                    'tipo_usuario': tipo_usuario         # ✅ Nuevo: incluir tipo de usuario
                 },
                 'search_results': {
                     'itineraries_count': len(itinerarios.get('itineraries', [])) if isinstance(itinerarios, dict) and 'itineraries' in itinerarios else len(itinerarios) if isinstance(itinerarios, list) else 0,
@@ -119,14 +130,19 @@ class ItineraryPreviewView(APIView):
 
         except Exception as e:
             # Log del error pero no interrumpir el flujo principal
-            print(f"Error al guardar interacción de búsqueda: {str(e)}")
+            logger.error(f"Error al guardar interacción de búsqueda: {str(e)}")
             return None
 
     def _get_session_id(self, request):
-        """Obtiene o crea un ID de sesión para el usuario"""
-        if not request.session.session_key:
-            request.session.create()
-        return request.session.session_key
+        """Obtiene el session_id de la request"""
+        if hasattr(request, 'session') and request.session.session_key:
+            return request.session.session_key
+        elif request.user.is_authenticated:
+            return f"user_{request.user.id}"
+        else:
+            # Generar un session_id único para usuarios anónimos
+            import uuid
+            return f"anon_{uuid.uuid4().hex[:16]}"
 
     def _get_client_ip(self, request):
         """Obtiene la IP real del cliente"""
@@ -363,6 +379,12 @@ class SaveItineraryView(APIView):
                 # Procesar items del itinerario
                 items_creados = self._create_itinerary_items(itinerary, data['itinerario_data'])
                 
+                # GUARDAR INTERACCIÓN DE GUARDADO DE ITINERARIO
+                self._save_itinerary_save_interaction(request, itinerary, data['itinerario_data'], items_creados)
+                
+                # ACTUALIZAR PERFIL DEL USUARIO BASADO EN EL ITINERARIO (INCLUYENDO EXPERIENCIAS)
+                self._update_user_profile_from_itinerary(user, data['itinerario_data'])
+                
                 return Response({
                     "message": "Itinerario guardado exitosamente",
                     "itinerary_id": str(itinerary.itinerary_id),
@@ -377,6 +399,344 @@ class SaveItineraryView(APIView):
                 {"error": f"Error al guardar itinerario: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+        
+    def _get_session_id(self, request):
+        """Obtiene el session_id de la request"""
+        if hasattr(request, 'session') and request.session.session_key:
+            return request.session.session_key
+        elif request.user.is_authenticated:
+            return f"user_{request.user.id}"
+        else:
+            # Generar un session_id único para usuarios anónimos
+            import uuid
+            return f"anon_{uuid.uuid4().hex[:16]}"
+    
+    def _get_client_ip(self, request):
+        """Obtiene la IP real del cliente"""
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+        return ip
+    
+    def _save_itinerary_save_interaction(self, request, itinerary, itinerario_data, items_creados):
+        """Guarda la interacción de guardado de itinerario incluyendo experiencias"""
+        try:
+            user = request.user if request.user.is_authenticated else None
+            session_id = self._get_session_id(request)
+            
+            # Extraer información relevante para el perfilado
+            servicios = itinerario_data.get('servicios', {})
+            preferences = itinerario_data.get('preferences', {})
+            experiencias = itinerario_data.get('experiencias', []) 
+            
+            metadata = {
+                'itinerary_info': {
+                    'itinerary_id': str(itinerary.itinerary_id),
+                    'name': itinerary.name,
+                    'total_items': len(items_creados),
+                    'items_by_type': {k: len(v) for k, v in servicios.items()}
+                },
+                'user_preferences': preferences,
+                'experiencias_seleccionadas': experiencias,
+                'service_distribution': self._analyze_service_distribution(servicios),
+                'budget_info': {
+                    'total_budget': itinerario_data.get('presupuesto', 0),
+                    'budget_utilization': itinerario_data.get('utilizacion_presupuesto', 0)
+                },
+                'traveler_type_used': itinerario_data.get('tipo_usuario'), 
+                'request_info': {
+                    'ip_address': self._get_client_ip(request),
+                    'user_agent': request.META.get('HTTP_USER_AGENT', ''),
+                    'timestamp': timezone.now().isoformat()
+                }
+            }
+            
+            # Crear la interacción
+            interaction = Interaction.objects.create(
+                user_id=user,
+                session_id=session_id,
+                action=InteractionAction.SAVE_ITINERARY,
+                content_type=ContentType.objects.get_for_model(Itinerary),
+                object_id=itinerary.itinerary_id,
+                ip_address=self._get_client_ip(request),
+                user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                metadata=metadata
+            )
+            
+            logger.info(f"✅ Interacción de guardado registrada: {interaction.interaction_id}")
+            return interaction
+            
+        except Exception as e:
+            logger.error(f"❌ Error al guardar interacción de itinerario: {str(e)}")
+            return None
+    
+    def _update_user_profile_from_itinerary(self, user, itinerario_data):
+        """Actualiza el perfil del usuario basado en el itinerario guardado (incluye experiencias)"""
+        try:
+            if not user.is_authenticated:
+                return
+            
+            servicios = itinerario_data.get('servicios', {})
+            preferences = itinerario_data.get('preferences', {})
+            experiencias = itinerario_data.get('experiencias', [])
+            traveler_type_used = itinerario_data.get('tipo_usuario')
+            
+            # 1. Actualizar intereses del usuario (incluyendo experiencias)
+            self._update_user_interests(user, servicios, preferences, experiencias)
+            
+            # 2. Actualizar traveler type (considerando experiencias y tipo usado)
+            self._update_traveler_type(user, servicios, preferences, experiencias, traveler_type_used)
+            
+            logger.info(f"✅ Perfil actualizado para usuario: {user.email}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error actualizando perfil de usuario: {str(e)}")
+    
+    def _update_user_interests(self, user, servicios, preferences, experiencias):
+        """Actualiza los intereses del usuario basado en servicios, preferencias y EXPERIENCIAS"""
+        try:
+            # Mapeo de tipos de servicio a intereses
+            service_to_interest = {
+                'actividades': ['Aventura', 'Cultura', 'Naturaleza', 'Deportes'],
+                'eventos': ['Cultura', 'Música', 'Arte', 'Deportes'],
+                'hospedaje': ['Lujo', 'Económico', 'Aventura', 'Relax'],
+                'comida': ['Gastronomía', 'Local', 'Internacional'],
+                'transporte': ['Aventura', 'Confort', 'Económico']
+            }
+            
+            # Mapeo de experiencias a intereses
+            experiencia_to_interest = {
+                'Aventura': ['Aventura', 'Naturaleza', 'Deportes', 'Extremo'],
+                'Cultura': ['Cultura', 'Arte', 'Historia', 'Tradiciones'],
+                'Gastronomía': ['Gastronomía', 'Local', 'Vinos', 'Culinario'],
+                'Relax': ['Relax', 'Bienestar', 'Spa', 'Tranquilidad'],
+                'Naturaleza': ['Naturaleza', 'Ecoturismo', 'Aire Libre', 'Aventura'],
+                'Urbano': ['Ciudad', 'Compras', 'Entretenimiento', 'Moderno'],
+                'Familiar': ['Familia', 'Niños', 'Diversión', 'Seguro'],
+                'Romántico': ['Romántico', 'Lujo', 'Intimidad', 'Relax']
+            }
+            
+            # Intereses detectados en este itinerario
+            detected_interests = set()
+            
+            # 1. Analizar distribución de servicios
+            for service_type, services in servicios.items():
+                if service_type in service_to_interest and services:
+                    detected_interests.update(service_to_interest[service_type])
+            
+            # 2. Analizar EXPERIENCIAS seleccionadas (MUY IMPORTANTE)
+            for experiencia in experiencias:
+                if experiencia in experiencia_to_interest:
+                    detected_interests.update(experiencia_to_interest[experiencia])
+                    # Las experiencias tienen mayor peso, así que las agregamos dos veces
+                    detected_interests.update(experiencia_to_interest[experiencia])
+            
+            # 3. Analizar preferencias explícitas
+            if preferences.get('adventure', False):
+                detected_interests.add('Aventura')
+            if preferences.get('cultural', False):
+                detected_interests.add('Cultura')
+            if preferences.get('gastronomy', False):
+                detected_interests.add('Gastronomía')
+            if preferences.get('relax', False):
+                detected_interests.add('Relax')
+            
+            # Actualizar pesos de intereses existentes o crear nuevos
+            from apps.users.models import Interest, UserInterest
+            from decimal import Decimal
+            
+            for interest_name in detected_interests:
+                interest, created = Interest.objects.get_or_create(name=interest_name)
+                
+                user_interest, created = UserInterest.objects.get_or_create(
+                    user_id=user,
+                    interest_id=interest,
+                    defaults={'weight': Decimal('0.1')}  # Peso inicial como Decimal
+                )
+                
+                if not created:
+                    # Incrementar peso existente (máximo 1.0)
+                    # Las experiencias tienen mayor incremento
+                    # Usar Decimal para los incrementos también
+                    if any(exp in interest_name for exp in experiencias):
+                        increment = Decimal('0.08')  # Experiencias: mayor incremento
+                    else:
+                        increment = Decimal('0.05')  # Servicios: incremento normal
+                    
+                    new_weight = min(user_interest.weight + increment, Decimal('1.0'))
+                    user_interest.weight = new_weight
+                    user_interest.save()
+                
+        except Exception as e:
+            logger.error(f"❌ Error actualizando intereses: {str(e)}")
+    
+    def _update_traveler_type(self, user, servicios, preferences, experiencias, traveler_type_used):
+        """Actualiza el traveler type basado en patrones detectados (incluye experiencias)"""
+        try:
+            from apps.users.models import TravelerType
+            
+            # Analizar patrones para determinar traveler type
+            service_patterns = self._analyze_travel_patterns(servicios, preferences, experiencias)
+            
+            # Buscar traveler type que coincida con los patrones
+            traveler_type = self._find_matching_traveler_type(service_patterns, traveler_type_used)
+            
+            if traveler_type and traveler_type != user.traveler_type_id:
+                user.traveler_type_id = traveler_type
+                user.save()
+                
+                logger.info(f"✅ Traveler type actualizado: {traveler_type.name}")
+                
+        except Exception as e:
+            logger.error(f"❌ Error actualizando traveler type: {str(e)}")
+    
+    def _analyze_travel_patterns(self, servicios, preferences, experiencias):
+        """Analiza patrones de viaje desde servicios, preferencias y EXPERIENCIAS"""
+        patterns = {
+            'adventure_score': 0,
+            'cultural_score': 0,
+            'luxury_score': 0,
+            'budget_score': 0,
+            'relax_score': 0,
+            'gastronomy_score': 0,
+            'nature_score': 0,    
+            'family_score': 0,    
+            'romantic_score': 0   
+        }
+        
+        # Puntajes basados en tipos de servicio
+        type_scores = {
+            'actividades': {'adventure_score': 2, 'cultural_score': 1, 'nature_score': 1},
+            'eventos': {'cultural_score': 2},
+            'hospedaje': {'luxury_score': 1, 'relax_score': 1},
+            'comida': {'cultural_score': 1, 'gastronomy_score': 2},
+            'transporte': {'adventure_score': 1}
+        }
+        
+        # Puntajes basados en EXPERIENCIAS
+        experiencia_scores = {
+            'Aventura': {'adventure_score': 3, 'nature_score': 2},
+            'Cultura': {'cultural_score': 3},
+            'Gastronomía': {'gastronomy_score': 3},
+            'Relax': {'relax_score': 3},
+            'Naturaleza': {'nature_score': 3, 'adventure_score': 1},
+            'Urbano': {'cultural_score': 1, 'luxury_score': 1},
+            'Familiar': {'family_score': 3},
+            'Romántico': {'romantic_score': 3, 'luxury_score': 2, 'relax_score': 1}
+        }
+        
+        # 1. Puntajes de servicios
+        for service_type, services in servicios.items():
+            if service_type in type_scores:
+                for pattern, score in type_scores[service_type].items():
+                    patterns[pattern] += score * len(services)
+        
+        # 2. Puntajes de EXPERIENCIAS (muy importantes)
+        for experiencia in experiencias:
+            if experiencia in experiencia_scores:
+                for pattern, score in experiencia_scores[experiencia].items():
+                    patterns[pattern] += score * 2  # Las experiencias tienen doble peso
+        
+        # 3. Ajustar por preferencias explícitas
+        preference_scores = {
+            'adventure': {'adventure_score': 3},
+            'cultural': {'cultural_score': 3},
+            'gastronomy': {'gastronomy_score': 3},
+            'luxury': {'luxury_score': 3},
+            'budget': {'budget_score': 3},
+            'relax': {'relax_score': 3}
+        }
+        
+        for pref_key, score_patterns in preference_scores.items():
+            if preferences.get(pref_key, False):
+                for pattern, score in score_patterns.items():
+                    patterns[pattern] += score
+            
+        return patterns
+    
+    def _find_matching_traveler_type(self, patterns, traveler_type_used):
+        """Encuentra el traveler type que mejor coincide con los patrones"""
+        from apps.users.models import TravelerType
+        
+        traveler_types = TravelerType.objects.filter(is_active=True)
+        best_match = None
+        best_score = 0
+        
+        # PRIMERO: Si tenemos un traveler_type_used, darle prioridad
+        if traveler_type_used:
+            try:
+                used_type = TravelerType.objects.get(name=traveler_type_used)
+                # Verificar que tenga un match razonable
+                used_score = self._calculate_traveler_type_match(used_type, patterns)
+                if used_score > 0.3:  # Umbral más bajo para el tipo usado
+                    return used_type
+            except TravelerType.DoesNotExist:
+                pass
+        
+        # Si no hay tipo usado o no coincide, buscar el mejor match
+        for tt in traveler_types:
+            score = self._calculate_traveler_type_match(tt, patterns)
+            if score > best_score:
+                best_score = score
+                best_match = tt
+        
+        return best_match if best_score > 0.5 else None
+    
+    def _calculate_traveler_type_match(self, traveler_type, patterns):
+        """Calcula qué tan bien coincide un traveler type con los patrones"""
+        name_lower = traveler_type.name.lower()
+        description_lower = (traveler_type.description or "").lower()
+        
+        score = 0
+        
+        # Mapeo de patrones a términos de búsqueda
+        pattern_terms = {
+            'adventure_score': ['aventur', 'extrem', 'deporte', 'activo'],
+            'cultural_score': ['cultur', 'arte', 'historia', 'museo', 'tradicion'],
+            'luxury_score': ['lujo', 'premium', 'exclusiv', 'confort'],
+            'budget_score': ['económic', 'budget', 'económico', 'ahorro'],
+            'relax_score': ['relax', 'tranquilo', 'descanso', 'spa', 'bienestar'],
+            'gastronomy_score': ['gastronom', 'comida', 'culinari', 'vinos'],
+            'nature_score': ['naturaleza', 'ecoturismo', 'aire libre', 'parque'],
+            'family_score': ['familiar', 'familia', 'niños', 'infantil'],
+            'romantic_score': ['romántic', 'pareja', 'luna de miel', 'intimidad']
+        }
+        
+        # Calcular score basado en patrones
+        for pattern, terms in pattern_terms.items():
+            pattern_value = patterns.get(pattern, 0)
+            if pattern_value > 0:
+                for term in terms:
+                    if term in name_lower or term in description_lower:
+                        score += pattern_value * 0.1  # Normalizar el score
+        
+        return min(score, 1.0)  # Máximo 1.0
+    
+    def _analyze_service_distribution(self, servicios):
+        """Analiza la distribución de servicios para el perfilado"""
+        try:
+            distribution = {}
+            total_services = sum(len(services) for services in servicios.values())
+            
+            for service_type, services in servicios.items():
+                if total_services > 0:
+                    percentage = (len(services) / total_services) * 100
+                    distribution[service_type] = {
+                        'count': len(services),
+                        'percentage': round(percentage, 2)
+                    }
+                else:
+                    distribution[service_type] = {
+                        'count': 0,
+                        'percentage': 0.0
+                    }
+            
+            return distribution
+        except Exception as e:
+            logger.error(f"Error analizando distribución de servicios: {str(e)}")
+            return {}
     
     def _create_itinerary_items(self, itinerary, itinerario_data):
         """Crea los items del itinerario usando tus modelos reales"""
