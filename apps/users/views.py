@@ -1,16 +1,13 @@
 from uuid import UUID
-
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError
-
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
-from .models import CustomUser
+from .models import CustomUser, Interest, UserInterest
 from .serializers import UserSerializer
 
 class CreateUserView(generics.CreateAPIView):
@@ -25,7 +22,46 @@ class CurrentUserView(APIView):
         return Response({
             "username": request.user.username,
             "email": request.user.email,
+            "first_name": request.user.first_name,
+            "last_name": request.user.last_name,
+            "gender": request.user.gender,
+            "nationality": request.user.nationality,
+            "language": request.user.language,
+            "currency": request.user.currency,
         })
+    
+    def patch(self, request):
+        user = request.user
+        serializer = UserSerializer(user, data=request.data, partial=True)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            with transaction.atomic():
+                updated_user = serializer.save()
+                print(f"✅ User updated: {updated_user.first_name} {updated_user.last_name}")  # Debug
+        except IntegrityError as e:
+            msg = str(e).lower()
+            if "email" in msg and "unique" in msg:
+                return Response({"detail": "Email ya está en uso"}, status=status.HTTP_400_BAD_REQUEST)
+            if "username" in msg and "unique" in msg:
+                return Response({"detail": "Username ya está en uso"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Violación de unicidad o integridad"}, status=status.HTTP_400_BAD_REQUEST)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "id": str(updated_user.id),
+            "username": updated_user.username,
+            "email": updated_user.email,
+            "first_name": updated_user.first_name,
+            "last_name": updated_user.last_name,
+            "gender": updated_user.gender,
+            "nationality": updated_user.nationality,
+            "language": updated_user.language,
+            "currency": updated_user.currency,
+        }, status=status.HTTP_200_OK)
     
 class UsernameAvailabilityView(APIView):
     def get(self, request):
@@ -157,4 +193,48 @@ def delete_user(request, user_id: str):
         return Response({"detail": "Usuario eliminado correctamente"}, status=status.HTTP_200_OK)
     except Exception as e:
         return Response({"detail": f"Error al eliminar usuario: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    
+class InterestListView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        interests = Interest.objects.filter(is_active=True) if hasattr(Interest, 'is_active') else Interest.objects.all()
+        interest_data = [{"id": str(interest.interest_id), "name": interest.name} for interest in interests]
+        return Response(interest_data)
 
+class UserInterestsView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        user = request.user
+        interest_ids = request.data.get('interests', [])
+        
+        try:
+            with transaction.atomic():
+                # Eliminar intereses existentes
+                UserInterest.objects.filter(user_id=user).delete()
+                
+                # Agregar nuevos intereses
+                for interest_id in interest_ids:
+                    interest = Interest.objects.get(interest_id=interest_id)
+                    UserInterest.objects.create(
+                        user_id=user,
+                        interest_id=interest,
+                        weight=1.0  # Peso por defecto
+                    )
+                
+            return Response({"detail": "Intereses guardados correctamente"}, status=status.HTTP_200_OK)
+            
+        except Interest.DoesNotExist:
+            return Response({"detail": "Uno o más intereses no existen"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"detail": f"Error al guardar intereses: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def get(self, request):
+        user = request.user
+        user_interests = UserInterest.objects.filter(user_id=user)
+        interest_data = [{
+            "id": str(interest.interest_id.interest_id),
+            "name": interest.interest_id.name
+        } for interest in user_interests]
+        return Response(interest_data)

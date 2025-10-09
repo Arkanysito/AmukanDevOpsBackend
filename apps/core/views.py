@@ -1,6 +1,6 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .constants import Gender, Nationality
+from .constants import Gender, Nationality, Language
 from django.http import JsonResponse, HttpResponseForbidden
 from apps.core.metabase_embed import build_signed_embed_url_for_dashboard
 from django.views.decorators.cache import never_cache
@@ -18,6 +18,7 @@ class ChoicesView(APIView):
         return Response({
             "gender": [{"value": choice.value, "label": choice.label} for choice in Gender],
             "nationality": [{"value": choice.value, "label": choice.label} for choice in Nationality],
+            "language": [{"value": choice.value, "label": choice.label} for choice in Language],
         })
 
 DASHBOARD_ID = 2  # tu dashboard en Metabase
