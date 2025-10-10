@@ -8,13 +8,13 @@ class Command(BaseCommand):
     help = "Genera embeddings para todos los Places"
 
     def handle(self, *args, **options):
-        model = SentenceTransformer("all-MiniLM-L6-v2")
+        model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
         for place in Place.objects.all():
 
             place_type = place.type
             if place_type == 'nan':
                 place_type = ''
-            text = f"{place.name}. {place_type}"
+            text = f"{place.name}. {place_type}. {place.description}"
             emb = model.encode(text).tolist()
             place.embedding = emb
             place.save(update_fields=["embedding"])
