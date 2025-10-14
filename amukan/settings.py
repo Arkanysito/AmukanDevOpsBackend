@@ -56,7 +56,6 @@ INSTALLED_APPS = [
     'apps.recommendation',
     'rest_framework',
     'corsheaders',
-    "apps.favorites",
     "pgvector.django",
 ]
 

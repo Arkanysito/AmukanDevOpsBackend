@@ -28,6 +28,5 @@ urlpatterns = [
     path('api-auth/', include("rest_framework.urls")),
     path("api/metabase/org-dashboard", get_org_dashboard_embed_url),
     path("api/experiences/", include("apps.experiences.urls")),
-    path("api/recommendations/", recommend_places_view, name="recommend_places"),
-    path("api/favorites/", include("apps.favorites.urls")),
+    path("api/recommendations/", recommend_places_view, name="recommend_places")
 ]
