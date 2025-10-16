@@ -73,6 +73,7 @@ class OrganizationCategory(models.TextChoices):
     HEALTHCARE = 'HEALTHCARE', 'Salud'
     NONPROFIT = 'NONPROFIT', 'ONG'
     GOVERNMENT = 'GOVERNMENT', 'Gobierno'
+    TOURISM = 'TOURISM', 'Turismo'
     PRIVATE = 'PRIVATE', 'Privada'
     OTHER = 'OTHER', 'Otro'
 
@@ -215,6 +216,11 @@ class AccommodationType(models.TextChoices):
     AIRBNB = 'AIRBNB', 'Airbnb'
     CAMPING = 'CAMPING', 'Camping'
     GUESTHOUSE = 'GUESTHOUSE', 'Casa de huéspedes'
+    CABIN = 'CABIN', 'Cabaña'
+    INN = 'INN', 'Hostería'
+    APARTMENT = 'APARTMENT', 'Departamento'
+    BED_BREAKFAST = 'BED_BREAKFAST', 'Bed & Breakfast'
+    SPA = 'SPA', 'Termas'
 
 class ActivityType(models.TextChoices):
     HIKING = 'HIKING', 'Senderismo'
