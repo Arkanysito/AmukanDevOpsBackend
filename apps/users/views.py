@@ -7,8 +7,14 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import CustomUser, Interest, UserInterest
-from .serializers import UserSerializer
+from .models import CustomUser, Interest, UserInterest, UserFavorite
+from .serializers import (
+    UserSerializer,
+    UserFavoriteSerializer,
+    resolve_content_type_for_target_type,
+)
+
+
 
 class CreateUserView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
@@ -237,4 +243,86 @@ class UserInterestsView(APIView):
             "id": str(interest.interest_id.interest_id),
             "name": interest.interest_id.name
         } for interest in user_interests]
-        return Response(interest_data)
+        return Response(interest_data)@api_view(["GET"])
+
+@permission_classes([IsAuthenticated])
+def list_user_favorites(request):
+    favorites_qs = UserFavorite.objects.filter(user=request.user).select_related("content_type")
+
+    target_type = request.query_params.get("target_type")
+    if target_type:
+        try:
+            content_type = resolve_content_type_for_target_type(target_type)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        favorites_qs = favorites_qs.filter(content_type=content_type)
+
+    payload = []
+    for favorite in favorites_qs:
+        payload.append(
+            {
+                "user_fav_id": str(favorite.user_fav_id),
+                "target_type": f"{favorite.content_type.app_label}.{favorite.content_type.model}",
+                "target_id": str(favorite.object_id),
+                "target_display_label": getattr(favorite.target, "name", None)
+                or getattr(favorite.target, "title", None)
+                or None,
+            }
+        )
+    return Response(payload)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def add_user_favorite(request):
+    serializer = UserFavoriteSerializer(data=request.data, context={"request": request})
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    favorite = serializer.save()
+    return Response(UserFavoriteSerializer(favorite).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def remove_user_favorite(request):
+    target_type = request.data.get("target_type") or request.query_params.get("target_type")
+    target_id = request.data.get("target_id") or request.query_params.get("target_id")
+
+    if not target_type or not target_id:
+        return Response({"detail": "Se requieren 'target_type' y 'target_id'."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        content_type = resolve_content_type_for_target_type(target_type)
+    except Exception as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    deleted_rows, _ = UserFavorite.objects.filter(
+        user=request.user, content_type=content_type, object_id=target_id
+    ).delete()
+
+    if deleted_rows:
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    return Response({"detail": "Favorito no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def toggle_user_favorite(request):
+    serializer = UserFavoriteSerializer(data=request.data, context={"request": request})
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    content_type = serializer.validated_data["content_type"]
+    object_uuid = serializer.validated_data["object_id"]
+
+    existing = UserFavorite.objects.filter(
+        user=request.user, content_type=content_type, object_id=object_uuid
+    ).first()
+    if existing:
+        existing.delete()
+        return Response({"toggled": "removed"}, status=status.HTTP_200_OK)
+
+    created = UserFavorite.objects.create(
+        user=request.user, content_type=content_type, object_id=object_uuid
+    )
+    return Response({"toggled": "added", "favorite": UserFavoriteSerializer(created).data}, status=status.HTTP_201_CREATED)

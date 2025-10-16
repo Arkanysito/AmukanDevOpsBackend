@@ -56,7 +56,7 @@ INSTALLED_APPS = [
     'apps.recommendation',
     'rest_framework',
     'corsheaders',
-    
+    "pgvector.django",
 ]
 
 MB_EMBEDDING_APP_SECRET = os.getenv("MB_EMBEDDING_APP_SECRET")
