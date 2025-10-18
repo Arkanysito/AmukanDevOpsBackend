@@ -173,7 +173,15 @@ class PlaceType(models.TextChoices):
     HISTORIC_SITE = 'historic_site', 'Historic Site'
     SHOPPING_MALL = 'shopping_mall', 'Shopping Mall'
     MARKET = 'market', 'Market'
-    
+    RESORT = 'resort', 'Resort'
+    BED_BREAKFAST = 'bed_and_breakfast', 'Bed & Breakfast'
+    CAMPSITE = 'campsite', 'Campsite'
+    TAXI_STAND = 'taxi_stand', 'Taxi Stand'
+    CAR_RENTAL = 'car_rental', 'Car Rental'
+    CLOTHING_STORE = 'clothing_store', 'Clothing Store'
+    CONVENIENCE_STORE = 'convenience_store', 'Convenience Store'
+    DEPARTMENT_STORE = 'department_store', 'Department Store'
+    APARTMENT = 'apartment', 'apartment'
     UNKNOWN = 'unknown', 'Unknown'
 
 

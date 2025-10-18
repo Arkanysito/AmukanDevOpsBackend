@@ -1,7 +1,7 @@
 # apps/travel/serializers.py
 from rest_framework import serializers
 from apps.travel.models import Itinerary, ItineraryItem, ItineraryCollaborator
-from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
+from apps.experiences.models import Event, AccommodationService, ActivityService
 from apps.location.models import Place
 from django.contrib.contenttypes.models import ContentType
 

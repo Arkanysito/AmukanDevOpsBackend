@@ -3,7 +3,6 @@ Módulo para calcular métricas de evaluación del sistema de recomendaciones
 """
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 import time
 from typing import List, Any, Callable
 
@@ -48,6 +47,24 @@ def calculate_coverage(all_recommendations: List[List[Any]], total_items: int) -
     return len(unique_recommended) / total_items
 
 
+def cosine_similarity_matrix(embeddings):
+    """Calcula matriz de similitud coseno usando numpy"""
+    if not embeddings:
+        return np.array([])
+    
+    # Convertir a array numpy 2D
+    emb_array = np.array(embeddings)
+    
+    # Normalizar vectores
+    norms = np.linalg.norm(emb_array, axis=1, keepdims=True)
+    norms[norms == 0] = 1  # Evitar división por cero
+    normalized = emb_array / norms
+    
+    # Matriz de similitud = producto punto de vectores normalizados
+    similarity_matrix = np.dot(normalized, normalized.T)
+    
+    return similarity_matrix
+
 def calculate_diversity(services: List[Any]) -> float:
     """
     Calcula diversidad: grado de variación temática entre servicios recomendados
@@ -76,23 +93,19 @@ def calculate_diversity(services: List[Any]) -> float:
         return 0.0
     
     try:
-        # Calcular matriz de similitud coseno
-        similarity_matrix = cosine_similarity(embeddings)
+        # Calcular matriz de similitud coseno con numpy
+        similarity_matrix = cosine_similarity_matrix(embeddings)
         
         # Diversidad = 1 - similitud promedio (excluyendo diagonal)
         n = len(similarity_matrix)
-        total_similarity = 0
-        count = 0
         
-        for i in range(n):
-            for j in range(i + 1, n):  # Solo pares únicos, excluir diagonal
-                total_similarity += similarity_matrix[i][j]
-                count += 1
+        # Obtener triángulo superior sin la diagonal
+        upper_triangle = similarity_matrix[np.triu_indices(n, k=1)]
         
-        if count == 0:
+        if len(upper_triangle) == 0:
             return 0.0
         
-        average_similarity = total_similarity / count
+        average_similarity = np.mean(upper_triangle)
         diversity = 1.0 - average_similarity
         
         return max(0.0, min(1.0, diversity))

@@ -45,7 +45,6 @@ class UserSerializer(serializers.ModelSerializer):
     
 TARGET_TYPE_TO_MODEL_PATH = {
     "accommodation": "experiences.AccommodationService",
-    "transport": "experiences.TransportService",
     "activity": "experiences.ActivityService",
     "place": "location.Place",
     "event": "experiences.Event",

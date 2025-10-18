@@ -7,8 +7,9 @@ from collections import defaultdict
 import math
 from typing import List, Dict, Any, Tuple
 from apps.location.models import Zone, Place
-from apps.experiences.models import ActivityService, AccommodationService, Event
+from apps.experiences.models import ActivityService, Event
 from apps.recommendation.services import recommend_places
+from apps.core.constants import PlaceType
 
 class ItineraryOptimizer:
     def __init__(self, user, destination, start_date, end_date, budget, travelers, preferences=None):
@@ -305,11 +306,12 @@ class ItineraryOptimizer:
         items = []
         total_cost = 0
         
-        # 1. Seleccionar alojamiento (ajustado por tipo de usuario)
+        # 1. Seleccionar alojamiento (ajustado por tipo de usuario) - AHORA DESDE PLACE
         if self.days > 1 and accommodations:
             acc = self._select_accommodation(effective_strategy, accommodations)
             if acc:
-                acc_cost = float(acc.price) * (self.days - 1) * self.travelers
+                # CALCULAR COSTO BASADO EN average_price DE PLACE
+                acc_cost = self._calculate_accommodation_cost(acc, effective_strategy)
                 items.append({
                     'service': acc,
                     'type': 'accommodation',
@@ -370,6 +372,23 @@ class ItineraryOptimizer:
             'tipo_usuario_used': self.tipo_usuario
         }
     
+    def _calculate_accommodation_cost(self, place, strategy):
+        """Calcula el costo de alojamiento basado en Place y estrategia"""
+        base_price = float(place.average_price) if place.average_price else 50.0
+        
+        # Ajustar precio según estrategia
+        strategy_multipliers = {
+            'budget': 0.8,
+            'balanced': 1.0,
+            'premium': 1.5
+        }
+        
+        multiplier = strategy_multipliers.get(strategy, 1.0)
+        adjusted_price = base_price * multiplier
+        
+        # Calcular costo total por noches
+        return adjusted_price * self.nights * self.travelers
+    
     def _adjust_strategy_by_tipo_usuario(self, original_strategy):
         """
         Ajusta la estrategia basada en el tipo de usuario
@@ -411,27 +430,42 @@ class ItineraryOptimizer:
         return meal_ratios.get(self.tipo_usuario.lower(), 0.3)
     
     def _get_accommodations(self, top_k=10):
-        """Obtiene alojamientos"""
+        """Obtiene alojamientos DESDE PLACE"""
         try:
             accommodations = recommend_places(self.user, 'accommodation', self.zone, top_k=top_k)
             if accommodations and isinstance(accommodations[0], tuple):
                 return [acc for acc, score in accommodations]
             return accommodations
         except:
-            accommodations = AccommodationService.objects.all()
+            #  Usar Place en lugar de AccommodationService
+            accommodation_types = [
+                PlaceType.HOTEL, PlaceType.HOSTEL, PlaceType.GUEST_HOUSE, 
+                PlaceType.RESORT, PlaceType.BED_BREAKFAST, PlaceType.MOTEL, 
+                PlaceType.CAMPSITE
+            ]
+            interesting_types = [pt.value for pt in accommodation_types]
+            
+            accommodations = Place.objects.filter(type__in=interesting_types)
             if self.zone:
-                accommodations = accommodations.filter(place_id__zone_id=self.zone)
+                accommodations = accommodations.filter(zone_id=self.zone)
             return list(accommodations[:top_k])
     
     def _get_restaurants(self, top_k=20):
-        """Obtiene restaurantes"""
+        """Obtiene restaurantes DESDE PLACE"""
         try:
             restaurants = recommend_places(self.user, 'restaurant', self.zone, top_k=top_k)
             if restaurants and isinstance(restaurants[0], tuple):
                 return [rest for rest, score in restaurants]
             return restaurants
         except:
-            restaurants = Place.objects.filter(type__in=['restaurant', 'cafe', 'bar'])
+            # Usar Place directamente
+            restaurant_types = [
+                PlaceType.RESTAURANT, PlaceType.CAFE, PlaceType.BAR, PlaceType.PUB,
+                PlaceType.FAST_FOOD, PlaceType.FOOD_COURT, PlaceType.ICE_CREAM
+            ]
+            interesting_types = [pt.value for pt in restaurant_types]
+            
+            restaurants = Place.objects.filter(type__in=interesting_types)
             if self.zone:
                 restaurants = restaurants.filter(zone_id=self.zone)
             return list(restaurants[:top_k])
@@ -1004,7 +1038,10 @@ class ItineraryOptimizer:
         if self.days > 1 and accommodations:
             acc = self._select_accommodation(strategy, accommodations)
             if acc:
-                acc_cost = float(acc.price) * (self.days - 1) * self.travelers
+                acc_cost = 0
+                if acc.average_price:
+                    acc_cost = float(acc.average_price) * (self.days - 1) * self.travelers
+
                 items.append({
                     'service': acc,
                     'type': 'accommodation',
@@ -1086,7 +1123,7 @@ class ItineraryOptimizer:
         return max(inicio1, inicio2) < min(fin1, fin2)
     
     def _select_accommodation(self, strategy, accommodations):
-        """Selecciona alojamiento - para same-day, no incluir alojamiento"""
+        """Selecciona alojamiento DESDE PLACE - para same-day, no incluir alojamiento"""
         if self.is_same_day:
             return None  # No alojamiento para same-day
         
@@ -1094,19 +1131,25 @@ class ItineraryOptimizer:
             return None
         
         if strategy == 'budget':
-            return min(accommodations, key=lambda x: float(x.price))
+            # Ordenar por precio más bajo
+            return min(accommodations, key=lambda x: float(x.average_price) if x.average_price else float('inf'))
         elif strategy == 'premium':
-            return max(accommodations, key=lambda x: float(x.rating))
+            # Ordenar por rating más alto
+            return max(accommodations, key=lambda x: float(x.rating) if x.rating else 0)
         else:
+            # Balanced: mejor relación rating/precio
             best_value = None
             best_ratio = -1
             
             for acc in accommodations:
-                if float(acc.price) > 0:
-                    ratio = float(acc.rating) / float(acc.price)
-                    if ratio > best_ratio:
-                        best_ratio = ratio
-                        best_value = acc
+                if acc.average_price and acc.rating:
+                    price = float(acc.average_price)
+                    rating = float(acc.rating)
+                    if price > 0:
+                        ratio = rating / price
+                        if ratio > best_ratio:
+                            best_ratio = ratio
+                            best_value = acc
             
             return best_value or accommodations[0]
     
@@ -1132,13 +1175,13 @@ class ItineraryOptimizer:
                 if not self.is_same_day or current_hour is None:
                     meal_types = ['breakfast', 'lunch', 'dinner']
                 else:
-                    if current_hour < 11:  # Antes de las 11AM: desayuno, almuerzo, cena
+                    if current_hour < 11:
                         meal_types = ['breakfast', 'lunch', 'dinner']
-                    elif current_hour < 15:  # 11AM-3PM: almuerzo, cena
+                    elif current_hour < 15:
                         meal_types = ['lunch', 'dinner']
-                    elif current_hour < 19:  # 3PM-7PM: cena
+                    elif current_hour < 19:
                         meal_types = ['dinner']
-                    else:  # Después de las 7PM: posible cena tardía o nada
+                    else:
                         meal_types = ['dinner'] if current_hour < 21 else []
                 
                 for meal_type in meal_types:
@@ -1174,7 +1217,7 @@ class ItineraryOptimizer:
                 restaurant_idx = (day * 3 + i) % len(selected_restaurants)
                 restaurant = selected_restaurants[restaurant_idx]
                 
-                # Calcular costo
+                # Calcular costo BASADO EN average_price DE PLACE
                 if hasattr(restaurant, 'average_price') and restaurant.average_price:
                     cost = float(restaurant.average_price) * self.travelers
                 else:
@@ -1183,9 +1226,9 @@ class ItineraryOptimizer:
                 # Para same-day, ajustar la hora de la comida
                 meal_time = day_date
                 if self.is_same_day and meal_type == 'lunch' and current_hour < 12:
-                    meal_time = meal_time.replace(hour=13, minute=0)  # Almuerzo a la 1PM
+                    meal_time = meal_time.replace(hour=13, minute=0)
                 elif self.is_same_day and meal_type == 'dinner' and current_hour < 18:
-                    meal_time = meal_time.replace(hour=20, minute=0)  # Cena a las 8PM
+                    meal_time = meal_time.replace(hour=20, minute=0)
                 
                 meals.append({
                     'service': restaurant,

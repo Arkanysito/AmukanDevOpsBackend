@@ -6,7 +6,7 @@ import random
 from datetime import datetime, timedelta, time
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from apps.experiences.models import TransportService, AccommodationService, ActivityService, Event
+from apps.experiences.models import AccommodationService, ActivityService, Event
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
 from apps.users.models import CustomUser
@@ -375,22 +375,6 @@ class Command(BaseCommand):
                     )
                     accommodation_count += 1
                     self.stdout.write(self.style.SUCCESS(f"Creado alojamiento: {service['name'][:30]}"))
-
-                elif service['service_type'] == 'transporte':
-                    TransportService.objects.create(
-                        organization_id=org,
-                        place_id=place,
-                        name=service['name'][:100],
-                        description=service['description'][:500] or f"Servicio de transporte en {service['region']}",
-                        price=round(random.uniform(10, 100), 2),
-                        price_currency=Currency.CLP,
-                        transport_type=random.choice([t[0] for t in TransportType.choices]),
-                        schedule={"lunes": "08:00-18:00", "viernes": "08:00-20:00"},
-                        capacity=random.randint(10, 50),
-                        rating=round(random.uniform(3.0, 5.0), 1)
-                    )
-                    transport_count += 1
-                    self.stdout.write(self.style.SUCCESS(f"Creado transporte: {service['name'][:30]}"))
 
                 elif service['service_type'] in ['recreacion', 'alimentacion']:
                     ActivityService.objects.create(

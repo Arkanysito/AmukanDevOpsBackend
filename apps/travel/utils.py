@@ -7,7 +7,7 @@ def obtener_coordenadas_servicio(service_obj):
         return None
     
     try:
-        # Para servicios con place_id (AccommodationService, ActivityService, TransportService)
+        # Para servicios con place_id (AccommodationService, ActivityService)
         if hasattr(service_obj, 'place_id') and service_obj.place_id:
             place = service_obj.place_id
             if hasattr(place, 'coordinates') and place.coordinates:

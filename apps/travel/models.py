@@ -1,6 +1,5 @@
 import uuid
 from django.db import models
-from apps.booking.models import Reservation
 from apps.core.constants import Currency, UserRole
 from apps.users.models import Interest, CustomUser
 from django.contrib.contenttypes.models import ContentType
@@ -19,7 +18,6 @@ class Itinerary(models.Model):
 class ItineraryItem(models.Model):
     item_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     itinerary_id = models.ForeignKey(Itinerary, on_delete=models.CASCADE)
-    reservation_id = models.ForeignKey(Reservation, on_delete=models.CASCADE, null=True, blank=True)
     content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.UUIDField()
     reservable = GenericForeignKey('content_type', 'object_id')

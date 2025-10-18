@@ -15,7 +15,7 @@ from django.contrib.contenttypes.models import ContentType
 import uuid
 import logging
 from apps.core.constants import UserRole
-from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
+from apps.experiences.models import Event, AccommodationService, ActivityService
 from apps.location.models import Place 
 from rest_framework import generics
 from django.db.models import Prefetch
@@ -756,11 +756,6 @@ class SaveItineraryView(APIView):
             'actividades': {
                 'content_type_model': 'activityservice',
                 'model_class': ActivityService,
-                'id_field': 'service_id'
-            },
-            'transporte': {
-                'content_type_model': 'transportservice', 
-                'model_class': TransportService,
                 'id_field': 'service_id'
             },
             'eventos': {

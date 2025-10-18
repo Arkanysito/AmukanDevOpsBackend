@@ -3,7 +3,7 @@ import uuid
 from apps.organizations.models import Organization
 from apps.location.models import Place
 from apps.core.constants import AccommodationType, ActivityType, Currency, TransportType
-from pgvector.django import VectorField
+from django.contrib.postgres.fields import ArrayField
 
 class AbstractService(models.Model):
     service_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -16,18 +16,13 @@ class AbstractService(models.Model):
     details = models.JSONField(blank=True, null=True)
     policies = models.JSONField(blank=True, null=True)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
-    embedding = VectorField(dimensions=384, null=True, blank=True) 
+    embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True) 
 
     class Meta:
         abstract = True
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
-
-class TransportService(AbstractService):
-    transport_type = models.CharField(max_length=10, choices=TransportType.choices)
-    schedule = models.JSONField(blank=True, null=True)
-    capacity = models.IntegerField(null=True, blank=True)
 
 
 class AccommodationService(AbstractService):
@@ -58,7 +53,7 @@ class Event(models.Model):
     details = models.JSONField(blank=True, null=True)
     is_featured = models.BooleanField(default=False)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
-    embedding = VectorField(dimensions=384, null=True, blank=True)
+    embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True)
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"

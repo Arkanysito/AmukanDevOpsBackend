@@ -2,7 +2,7 @@ import random
 from datetime import datetime, timedelta, time
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from apps.experiences.models import TransportService, AccommodationService, ActivityService, Event
+from apps.experiences.models import AccommodationService, ActivityService, Event
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
 from apps.users.models import CustomUser
@@ -52,20 +52,6 @@ class Command(BaseCommand):
             self.stdout.write(self.style.WARNING("No hay lugares disponibles en Place. Se requieren para poblar servicios."))
             return
 
-        # Poblar TransportService
-        for i in range(10):
-            TransportService.objects.create(
-                organization_id=random.choice(organizations),
-                place_id=random.choice(places),
-                name=f"Transporte {i}",
-                description="Servicio de transporte local",
-                price=random.uniform(10, 100),
-                price_currency=Currency.CLP,
-                transport_type=random.choice([t[0] for t in TransportType.choices]),
-                schedule={"lunes": "08:00-18:00", "viernes": "08:00-20:00"},
-                capacity=random.randint(10, 50),
-                rating=round(random.uniform(3.0, 5.0), 1)
-            )
 
         # Poblar AccommodationService
         for i in range(10):

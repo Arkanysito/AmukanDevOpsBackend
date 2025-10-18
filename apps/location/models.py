@@ -1,8 +1,8 @@
 from django.contrib.gis.db import models
 import uuid
-from pgvector.django import VectorField
 from apps.organizations.models import Organization
 from apps.core.constants import ZoneLevel, PlaceType
+from django.contrib.postgres.fields import ArrayField
 
 class Zone(models.Model):
     zone_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -34,7 +34,7 @@ class Place(models.Model):
     average_price = models.DecimalField(max_digits=8, decimal_places=2, blank=True, null=True)
     schedule = models.JSONField(blank=True, null=True)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
-    embedding = VectorField(dimensions=384, null=True, blank=True)
+    embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True)
 
     def __str__(self):
         if self.zone_id:

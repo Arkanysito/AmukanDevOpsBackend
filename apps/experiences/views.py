@@ -12,7 +12,6 @@ from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
 from apps.experiences.models import (
     AccommodationService,
-    TransportService,
     ActivityService,
 )
 
@@ -44,7 +43,6 @@ REQUIRED_BY_TYPE = {
 
 MODEL_BY_TYPE = {
     "accommodation": AccommodationService,
-    "transport": TransportService,
     "activity": ActivityService,
 }
 
@@ -99,25 +97,6 @@ def get_user_services(request):
                 "check_in_time": str(acc.check_in_time) if acc.check_in_time else None,
                 "check_out_time": str(acc.check_out_time) if acc.check_out_time else None,
                 #"created_at": acc.created_at.isoformat() if acc.created_at else None,
-            })
-        
-        # Transport services
-        transports = TransportService.objects.filter(organization_id=organization)
-        print(f"Transportes encontrados: {transports.count()}")
-        
-        for trans in transports:
-            services.append({
-                "service_id": str(trans.service_id),
-                "type": "transport",
-                "name": trans.name,
-                "description": trans.description,
-                "price": float(trans.price) if trans.price else None,
-                "price_currency": trans.price_currency,
-                "rating": float(trans.rating) if trans.rating else None,
-                "transport_type": trans.transport_type,
-                "capacity": trans.capacity,
-                "schedule": trans.schedule,
-                #"created_at": trans.created_at.isoformat() if trans.created_at else None,
             })
         
         # Activity services

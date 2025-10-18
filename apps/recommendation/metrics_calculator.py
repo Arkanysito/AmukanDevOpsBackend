@@ -150,7 +150,6 @@ class RecommendationMetricsCalculator:
             'eventservice': 'event',
             'event': 'event',
             'place': 'restaurant',
-            'transportservice': 'transport'
         }
         
         return type_mapping.get(model_name, 'unknown')

@@ -1,8 +1,9 @@
 import numpy as np
 from django.db.models import Prefetch, Q
 from django.core.cache import cache
-from sklearn.metrics.pairwise import cosine_similarity
-from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModel
+import torch
+import torch.nn.functional as F
 from datetime import timedelta
 from functools import lru_cache
 import hashlib
@@ -11,39 +12,70 @@ import random
 
 from apps.users.models import CustomUser, UserInterest
 from apps.location.models import Place, Zone
-from apps.experiences.models import AccommodationService, ActivityService, TransportService, Event
+from apps.experiences.models import AccommodationService, ActivityService, Event
 from apps.core.constants import PlaceType, InteractionAction
 from apps.tracking.models import Interaction
 
 # ============================================================================
-# Singleton para el modelo - Carga UNA SOLA VEZ
+# Singleton para el modelo - Carga UNA SOLA VEZ con transformers
 # ============================================================================
 class ModelSingleton:
-    """Singleton para mantener el modelo en memoria y evitar recargas"""
     _instance = None
     _model = None
+    _tokenizer = None
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ModelSingleton, cls).__new__(cls)
-            cls._model = None
         return cls._instance
     
     def get_model(self):
-        """Retorna el modelo, cargándolo solo si es necesario"""
         if self._model is None:
-            print("Loading SentenceTransformer model (one-time operation)...")
-            self._model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-            print("Model loaded successfully")
-        return self._model
+            print("Loading transformers model (one-time operation)...")
+            model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self._model = AutoModel.from_pretrained(model_name)
+            print("Transformers model loaded successfully")
+        return self._model, self._tokenizer
 
-# Instancia global
 _model_singleton = ModelSingleton()
 
-def get_sentence_transformer():
-    """Función helper para obtener el modelo"""
+def get_transformer_model():
     return _model_singleton.get_model()
 
+def encode_texts(texts):
+    """
+    Reemplaza model.encode() de sentence-transformers
+    """
+    model, tokenizer = get_transformer_model()
+    
+    if isinstance(texts, str):
+        texts = [texts]
+    
+    # Tokenizar
+    encoded_input = tokenizer(
+        texts, 
+        padding=True, 
+        truncation=True, 
+        return_tensors='pt',
+        max_length=512
+    )
+    
+    # Generar embeddings
+    with torch.no_grad():
+        model_output = model(**encoded_input)
+    
+    # Mean pooling (igual que sentence-transformers)
+    embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
+    embeddings = F.normalize(embeddings, p=2, dim=1)
+    
+    return embeddings.numpy()
+
+def mean_pooling(model_output, attention_mask):
+    """Implementación de mean pooling igual a sentence-transformers"""
+    token_embeddings = model_output[0]
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
 # ============================================================================
 # Cache de vectores de usuario con Django Cache
@@ -58,9 +90,6 @@ def invalidate_user_vector_cache(user_id: int):
     cache.delete(cache_key)
 
 def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
-    """
-    Construye vector de usuario con cache
-    """
     if user is None:
         return None
     
@@ -79,26 +108,24 @@ def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
     if not interests:
         return None
     
-    # Usar singleton del modelo
-    model = get_sentence_transformer()
+    # Procesar embeddings con transformers
+    interest_texts = [interest.interest_id.name for interest in interests]
+    interest_embeddings = encode_texts(interest_texts)
     
-    # Procesar embeddings
-    interest_embeddings = []
-    for interest in interests:
-        text = interest.interest_id.name
-        emb = model.encode(text, show_progress_bar=False)
-        weighted_emb = emb * float(interest.weight)
-        interest_embeddings.append(weighted_emb)
+    # Aplicar pesos
+    weighted_embeddings = []
+    for i, interest in enumerate(interests):
+        weighted_emb = interest_embeddings[i] * float(interest.weight)
+        weighted_embeddings.append(weighted_emb)
     
-    user_embedding = np.mean(interest_embeddings, axis=0)
+    user_embedding = np.mean(weighted_embeddings, axis=0)
     
-    # Guardar en cache (24 horas por defecto)
+    # Guardar en cache
     if use_cache:
         cache_key = get_user_vector_cache_key(user.id)
         cache.set(cache_key, user_embedding, timeout=86400)
     
     return user_embedding
-
 
 # ============================================================================
 # FUNCIÓN HELPER: Obtener clave única del servicio
@@ -116,7 +143,7 @@ def get_service_key(service):
 
 
 # ============================================================================
-# MEJORA 3: Batch processing de embeddings de servicios
+# Batch processing de embeddings de servicios
 # ============================================================================
 def get_service_embeddings_batch(services):
     """
@@ -153,20 +180,29 @@ def get_service_embeddings_batch(services):
 
 
 # ============================================================================
-# MEJORA 4: Optimización de queries con prefetch y select_related
+# Optimización de queries con prefetch y select_related
 # ============================================================================
 def get_optimized_services_queryset(service_type: str, zone: Zone = None):
     """
     Retorna queryset optimizado según el tipo de servicio.
     """
     if service_type == 'accommodation':
-        base_fields = ['service_id', 'embedding', 'rating', 'price']
-        queryset = AccommodationService.objects.exclude(embedding=None)\
-            .select_related('place_id')\
-            .only(*base_fields, 'place_id__zone_id', 'place_id__name')
+        # CAMBIO PRINCIPAL: Ahora usamos Place en lugar de AccommodationService
+        accommodation_types = [
+            PlaceType.HOTEL, PlaceType.HOSTEL, PlaceType.GUEST_HOUSE, 
+            PlaceType.APARTMENT, PlaceType.RESORT, PlaceType.VILLA,
+            PlaceType.BED_AND_BREAKFAST, PlaceType.MOTEL, PlaceType.LODGE,
+            PlaceType.HOLIDAY_HOME, PlaceType.CAMPSITE, PlaceType.COTTAGE
+        ]
+        interesting_types = [pt.value for pt in accommodation_types]
+        
+        base_fields = ['place_id', 'embedding', 'rating', 'average_price']
+        queryset = Place.objects.exclude(embedding=None)\
+            .filter(type__in=interesting_types)\
+            .only(*base_fields, 'zone_id', 'name', 'type')
         
         if zone:
-            queryset = queryset.filter(place_id__zone_id=zone)
+            queryset = queryset.filter(zone_id=zone)
             
     elif service_type == 'activity':
         base_fields = ['service_id', 'embedding', 'rating', 'price']
@@ -234,6 +270,22 @@ def get_recommendations_cache_key(user_id: int, service_type: str, zone_id: int 
     zone_str = str(zone_id) if zone_id else "all"
     return f"recommendations_{user_id}_{service_type}_{zone_str}_{top_k}"
 
+import numpy as np
+
+def cosine_similarity_numpy(vec1, vec2):
+    """Calcula similitud coseno entre dos vectores usando numpy"""
+    vec1_array = np.array(vec1, dtype=np.float32)
+    vec2_array = np.array(vec2, dtype=np.float32)
+    
+    dot_product = np.dot(vec1_array, vec2_array)
+    norm1 = np.linalg.norm(vec1_array)
+    norm2 = np.linalg.norm(vec2_array)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    return dot_product / (norm1 * norm2)
+
 def recommend_places(user: CustomUser, service_type: str, zone: Zone = None, 
                     top_k: int = 20, use_cache: bool = True):
     """
@@ -280,7 +332,8 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 service_key = get_service_key(service)
                 if service_key in embeddings_map:
                     service_embedding = embeddings_map[service_key]
-                    score = cosine_similarity([u_vec], [service_embedding])[0][0]
+                    # CAMBIO AQUÍ: usar numpy en lugar de cosine
+                    score = cosine_similarity_numpy(u_vec, service_embedding)
                     results.append((service, float(score)))
             
             # Agregar fallback si es necesario
@@ -313,7 +366,8 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 continue
             
             service_embedding = embeddings_map[service_key]
-            score = cosine_similarity([u_vec], [service_embedding])[0][0]
+            # CAMBIO AQUÍ: usar numpy en lugar de cosine
+            score = cosine_similarity_numpy(u_vec, service_embedding)
             results.append((service, float(score)))
         
         # Ordenar y retornar top_k
@@ -350,12 +404,17 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         return cached_result
     
     if service_type == 'accommodation':
-        services = AccommodationService.objects.all()\
-            .select_related('place_id')\
-            .only('service_id', 'rating', 'price', 'place_id__name')
+        accommodation_types = [
+            PlaceType.HOTEL, PlaceType.HOSTEL, PlaceType.GUEST_HOUSE, 
+            PlaceType.RESORT, PlaceType.BED_BREAKFAST, PlaceType.MOTEL
+        ]
+        interesting_types = [pt.value for pt in accommodation_types]
+        
+        services = Place.objects.filter(type__in=interesting_types)\
+            .only('place_id', 'rating', 'average_price', 'name', 'type', 'zone_id')
         
         if zone:
-            services = services.filter(place_id__zone_id=zone)
+            services = services.filter(zone_id=zone)
         
         result = list(services.order_by('-rating')[:top_k])
         
@@ -410,9 +469,9 @@ def warmup_recommendation_system():
     """
     try:
         print("Warming up recommendation system...")
-        model = get_sentence_transformer()
+        model, tokenizer = get_transformer_model()
         # Test encoding
-        _ = model.encode("test", show_progress_bar=False)
+        _ = encode_texts("test")
         print("Recommendation system ready")
     except Exception as e:
         print(f"Warning: Could not warm up recommendation system: {e}")
@@ -472,18 +531,23 @@ class RecommendationCacheMonitor:
 # ============================================================================
 def recommend_places_batch(users: list, service_type: str, zone: Zone = None, top_k: int = 20):
     """
-    Genera recomendaciones para múltiples usuarios en batch.
+    Versión optimizada para batch usando operaciones vectorizadas.
     """
     results = {}
     
     # Precalcular vectores de usuarios
     user_vectors = {}
+    valid_users = []
     for user in users:
         u_vec = get_user_vector(user, use_cache=True)
         if u_vec is not None:
-            user_vectors[user.id] = u_vec
+            user_vectors[user.id] = np.array(u_vec, dtype=np.float32)
+            valid_users.append(user)
     
-    # Cargar servicios una sola vez
+    if not valid_users:
+        return results
+    
+    # Cargar servicios
     services = get_optimized_services_queryset(service_type, zone)
     if services is None:
         return results
@@ -491,31 +555,47 @@ def recommend_places_batch(users: list, service_type: str, zone: Zone = None, to
     services_list = list(services[:top_k * 3])
     embeddings_map = get_service_embeddings_batch(services_list)
     
-    # Calcular recomendaciones para cada usuario
-    for user in users:
-        if user.id not in user_vectors:
-            results[user.id] = get_fallback_services(service_type, zone, top_k)
-            continue
-        
+    # Convertir embeddings de servicios a numpy array
+    service_embeddings = []
+    valid_services = []
+    for service in services_list:
+        service_key = get_service_key(service)
+        if service_key in embeddings_map:
+            service_embeddings.append(np.array(embeddings_map[service_key], dtype=np.float32))
+            valid_services.append(service)
+    
+    if not service_embeddings:
+        return results
+    
+    service_embeddings_array = np.array(service_embeddings)
+    
+    # Normalizar embeddings de servicios para cálculo eficiente
+    service_norms = np.linalg.norm(service_embeddings_array, axis=1, keepdims=True)
+    service_norms[service_norms == 0] = 1  # Evitar división por cero
+    service_embeddings_normalized = service_embeddings_array / service_norms
+    
+    # Calcular para cada usuario
+    for user in valid_users:
         u_vec = user_vectors[user.id]
-        recommendations = []
+        u_vec_normalized = u_vec / np.linalg.norm(u_vec)
         
-        for service in services_list:
-            service_key = get_service_key(service)
-            if service_key not in embeddings_map:
-                continue
-            
-            service_embedding = embeddings_map[service_key]
-            score = cosine_similarity([u_vec], [service_embedding])[0][0]
-            recommendations.append((service, float(score)))
+        # Calcular similitudes en lote (vectorizado)
+        similarities = np.dot(service_embeddings_normalized, u_vec_normalized)
         
-        recommendations.sort(key=lambda x: x[1], reverse=True)
-        results[user.id] = recommendations[:top_k]
+        # Obtener top_k servicios
+        top_indices = np.argsort(similarities)[::-1][:top_k]
         
-        # Cachear cada resultado
+        recommendations = [
+            (valid_services[i], float(similarities[i])) 
+            for i in top_indices
+        ]
+        
+        results[user.id] = recommendations
+        
+        # Cachear
         cache_key = get_recommendations_cache_key(
             user.id, service_type, zone.zone_id if zone else None, top_k
         )
-        cache.set(cache_key, results[user.id], timeout=300)
+        cache.set(cache_key, recommendations, timeout=300)
     
     return results
