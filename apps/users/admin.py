@@ -46,7 +46,7 @@ class UserFavoriteAdmin(admin.ModelAdmin):
     search_fields = ("user__username", "user__email", "object_id")
 
     def user_username(self, obj):
-        return obj.user.username
+        return obj.user_id.username
 
     user_username.short_description = "User"
 

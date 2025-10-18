@@ -245,32 +245,59 @@ class UserInterestsView(APIView):
         } for interest in user_interests]
         return Response(interest_data)@api_view(["GET"])
 
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def list_user_favorites(request):
-    favorites_qs = UserFavorite.objects.filter(user=request.user).select_related("content_type")
+    try:
+        favorites_qs = UserFavorite.objects.filter(user_id=request.user).select_related("content_type")
 
-    target_type = request.query_params.get("target_type")
-    if target_type:
-        try:
-            content_type = resolve_content_type_for_target_type(target_type)
-        except Exception as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        favorites_qs = favorites_qs.filter(content_type=content_type)
+        target_type = request.query_params.get("target_type")
+        if target_type:
+            try:
+                content_type = resolve_content_type_for_target_type(target_type)
+                favorites_qs = favorites_qs.filter(content_type=content_type)
+            except Exception as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-    payload = []
-    for favorite in favorites_qs:
-        payload.append(
-            {
+        payload = []
+        for favorite in favorites_qs:
+            target_display = None
+            target_details = {}
+            
+            try:
+                target_obj = favorite.target
+                if target_obj:
+                    # Obtener el nombre/título
+                    target_display = getattr(target_obj, "name", None) or getattr(target_obj, "title", None) or str(target_obj)
+                    
+                    # Obtener detalles específicos según el tipo
+                    if hasattr(target_obj, 'accommodation_type'):
+                        target_details['accommodation_type'] = getattr(target_obj, 'accommodation_type', None)
+                    if hasattr(target_obj, 'type'):
+                        target_details['place_type'] = getattr(target_obj, 'type', None)
+                    if hasattr(target_obj, 'activity_type'):
+                        target_details['activity_type'] = getattr(target_obj, 'activity_type', None)
+                        
+            except Exception as e:
+                print(f"Error obteniendo target object: {e}")
+                target_display = "Objeto eliminado"
+
+            payload.append({
                 "user_fav_id": str(favorite.user_fav_id),
                 "target_type": f"{favorite.content_type.app_label}.{favorite.content_type.model}",
                 "target_id": str(favorite.object_id),
-                "target_display_label": getattr(favorite.target, "name", None)
-                or getattr(favorite.target, "title", None)
-                or None,
-            }
+                "target_display_label": target_display,
+                "target_details": target_details,
+            })
+        
+        return Response(payload)
+        
+    except Exception as e:
+        print(f"Error en list_user_favorites: {str(e)}")
+        return Response(
+            {"detail": "Error interno del servidor al obtener favoritos"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
-    return Response(payload)
-
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
@@ -297,7 +324,7 @@ def remove_user_favorite(request):
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
     deleted_rows, _ = UserFavorite.objects.filter(
-        user=request.user, content_type=content_type, object_id=target_id
+        user_id=request.user, content_type=content_type, object_id=target_id
     ).delete()
 
     if deleted_rows:
@@ -316,13 +343,13 @@ def toggle_user_favorite(request):
     object_uuid = serializer.validated_data["object_id"]
 
     existing = UserFavorite.objects.filter(
-        user=request.user, content_type=content_type, object_id=object_uuid
+        user_id=request.user, content_type=content_type, object_id=object_uuid
     ).first()
     if existing:
         existing.delete()
         return Response({"toggled": "removed"}, status=status.HTTP_200_OK)
 
     created = UserFavorite.objects.create(
-        user=request.user, content_type=content_type, object_id=object_uuid
+        user_id=request.user, content_type=content_type, object_id=object_uuid
     )
     return Response({"toggled": "added", "favorite": UserFavoriteSerializer(created).data}, status=status.HTTP_201_CREATED)

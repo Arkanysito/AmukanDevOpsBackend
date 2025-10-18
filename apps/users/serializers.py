@@ -53,12 +53,16 @@ TARGET_TYPE_TO_MODEL_PATH = {
 def resolve_content_type_for_target_type(target_type: str) -> ContentType:
     model_path = TARGET_TYPE_TO_MODEL_PATH.get(target_type)
     if not model_path:
-        raise ValueError(f"target_type inválido: {target_type}")
-    app_label, model_name = model_path.split(".")
-    model_class = apps.get_model(app_label=app_label, model_name=model_name)
-    if model_class is None:
-        raise ValueError(f"Modelo no encontrado para {model_path}")
-    return ContentType.objects.get_for_model(model_class)
+        raise ValueError(f"target_type inválido: {target_type}. Opciones válidas: {list(TARGET_TYPE_TO_MODEL_PATH.keys())}")
+    
+    try:
+        app_label, model_name = model_path.split(".")
+        model_class = apps.get_model(app_label=app_label, model_name=model_name)
+        if model_class is None:
+            raise ValueError(f"Modelo no encontrado para {model_path}")
+        return ContentType.objects.get_for_model(model_class)
+    except LookupError as e:
+        raise ValueError(f"Error al cargar el modelo {model_path}: {str(e)}")
 
 class UserFavoriteSerializer(serializers.ModelSerializer):
     # Entrada
@@ -95,8 +99,8 @@ class UserFavoriteSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         current_user = self.context["request"].user
-        favorite, _ = UserFavorite.objects.get_or_create(
-            user=current_user,
+        favorite, created = UserFavorite.objects.get_or_create(
+            user_id=current_user,
             content_type=validated_data["content_type"],
             object_id=validated_data["object_id"],
         )
