@@ -9,6 +9,9 @@ shapely==2.0.4
 beautifulsoup4==4.12.3
 gunicorn==22.0.0
 python-dotenv==1.0.1
-transformers==4.37.2
+transformers==4.40.0
+huggingface-hub==0.24.0
 torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
-numpy==2.1.2
+numpy==1.26.4
+selenium==4.19.0
+webdriver-manager==4.0.1
