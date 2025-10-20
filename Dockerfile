@@ -1,5 +1,20 @@
 FROM python:3.12-slim
 
+# Instalar dependencias del sistema incluyendo Chrome
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    curl \
+    && curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    fonts-freefont-ttf \
+    fontconfig \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Instalar dependencias para GDAL y PostgreSQL
 RUN apt-get update && apt-get install -y \
     gdal-bin \
     libgdal-dev \
