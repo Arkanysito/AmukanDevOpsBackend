@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand
 from django.contrib.gis.geos import Point
 from apps.experiences.models import ActivityService, ActivityType
 from apps.organizations.models import Organization
-from apps.location.models import Place, PlaceType
+from apps.location.models import Place, PlaceType, Zone
 from apps.core.constants import OrganizationCategory, SubscriptionPlan, Currency
 import random
 
@@ -111,12 +111,13 @@ class Command(BaseCommand):
         for tour in ACTIVIDADES:
             lon, lat = tour["coords"]
             point = Point(lon, lat)
-
+            zona_vina = Zone.objects.get(name__icontains="Viña Del Mar")
             # Verificar si el lugar ya existe por nombre y coordenadas
             place, place_created = Place.objects.get_or_create(
                 organization_id=organizacion,
                 name=tour["nombre"],
                 coordinates=point,
+                zone_id=zona_vina,
                 defaults={
                     "description": tour["detalles"],
                     "address": tour["direccion"],

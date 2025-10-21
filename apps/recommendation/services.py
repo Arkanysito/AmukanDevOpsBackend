@@ -49,6 +49,11 @@ def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
     
     user_embedding = np.mean(weighted_embeddings, axis=0)
     
+    # NORMALIZAR EL VECTOR DEL USUARIO (ARREGLA LAS SIMILITUDES BAJAS)
+    user_norm = np.linalg.norm(user_embedding)
+    if user_norm > 0:
+        user_embedding = user_embedding / user_norm
+    
     # Guardar en cache
     if use_cache:
         cache_key = get_user_vector_cache_key(user.id)
@@ -215,9 +220,9 @@ def cosine_similarity_numpy(vec1, vec2):
     return dot_product / (norm1 * norm2)
 
 def recommend_places(user: CustomUser, service_type: str, zone: Zone = None, 
-                    top_k: int = 20, use_cache: bool = True):
+                    top_k: int = 20, use_cache: bool = True, diversity_ratio: float = 0.3):
     """
-    Recomienda servicios con optimizaciones de rendimiento.
+    Recomienda servicios con diversificación para evitar sobre-especialización.
     """
     try:
         # Cache de recomendaciones completas
@@ -250,8 +255,8 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
             fallback = get_fallback_services(service_type, zone, top_k)
             return [(s, 0.5) for s in fallback]
         
-        # Si hay pocos servicios, combinar con fallback
-        if services_count < top_k:
+        # Si hay pocos servicios, no aplicar diversificación
+        if services_count < top_k * 1.5:
             services_list = list(services)
             embeddings_map = get_service_embeddings_batch(services_list)
             
@@ -260,7 +265,6 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 service_key = get_service_key(service)
                 if service_key in embeddings_map:
                     service_embedding = embeddings_map[service_key]
-                    # CAMBIO AQUÍ: usar numpy en lugar de cosine
                     score = cosine_similarity_numpy(u_vec, service_embedding)
                     results.append((service, float(score)))
             
@@ -282,11 +286,13 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
             
             return final_results
         
-        # Procesar todos los servicios
-        services_list = list(services[:top_k * 3])
+        # ESTRATEGIA CON DIVERSIFICACIÓN - Para cuando hay suficientes servicios
+        
+        # Obtener más servicios para permitir diversificación
+        services_list = list(services[:top_k * 5])  # Más servicios para seleccionar
         embeddings_map = get_service_embeddings_batch(services_list)
         
-        # Calcular similitudes en batch
+        # Calcular similitudes para todos los servicios
         results = []
         for service in services_list:
             service_key = get_service_key(service)
@@ -294,13 +300,14 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 continue
             
             service_embedding = embeddings_map[service_key]
-            # CAMBIO AQUÍ: usar numpy en lugar de cosine
             score = cosine_similarity_numpy(u_vec, service_embedding)
             results.append((service, float(score)))
         
-        # Ordenar y retornar top_k
+        # Ordenar por similitud
         results.sort(key=lambda x: x[1], reverse=True)
-        final_results = results[:top_k]
+        
+        # APLICAR DIVERSIFICACIÓN
+        final_results = _diversify_recommendations(results, top_k, diversity_ratio)
         
         # Cachear resultados (5 minutos)
         if use_cache and user is not None:
@@ -315,6 +322,104 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
         print(f"Error in recommend_places: {e}")
         fallback = get_fallback_services(service_type, zone, top_k)
         return [(s, 0.5) for s in fallback]
+
+
+def _diversify_recommendations(recommendations, top_k, diversity_ratio=0.3):
+    """
+    Diversifica las recomendaciones mezclando servicios similares y diversos.
+    
+    Args:
+        recommendations: Lista de (servicio, score) ordenada por score
+        top_k: Número total de recomendaciones a retornar
+        diversity_ratio: Proporción de recomendaciones diversas (0.0-1.0)
+    """
+    if len(recommendations) <= top_k:
+        return recommendations[:top_k]
+    
+    # Calcular cuántas recomendaciones diversas incluir
+    num_diverse = max(1, int(top_k * diversity_ratio))
+    num_main = top_k - num_diverse
+    
+    # Tomar las mejores recomendaciones (alta similitud)
+    main_recommendations = recommendations[:num_main * 2]  # Tomar el doble para seleccionar
+    
+    # Seleccionar recomendaciones diversas (de la parte media)
+    diverse_candidates = recommendations[num_main * 2:num_main * 2 + num_diverse * 3]
+    
+    # Estrategia de diversificación: mezclar por tipo/categoría
+    final_results = []
+    
+    # 1. Agregar las mejores recomendaciones (asegurar relevancia)
+    final_results.extend(main_recommendations[:num_main])
+    
+    # 2. Agregar recomendaciones diversas
+    if diverse_candidates:
+        # Seleccionar diversos intentando variar tipos/categorías
+        selected_diverse = _select_diverse_services(diverse_candidates, num_diverse)
+        final_results.extend(selected_diverse)
+    
+    # Si no conseguimos suficientes, completar con las siguientes mejores
+    if len(final_results) < top_k:
+        remaining = top_k - len(final_results)
+        # Tomar de las que no están ya seleccionadas
+        all_selected_ids = {service[0].place_id for service in final_results if hasattr(service[0], 'place_id')}
+        additional = [rec for rec in recommendations if get_service_key(rec[0]) not in all_selected_ids]
+        final_results.extend(additional[:remaining])
+    
+    return final_results[:top_k]
+
+
+def _select_diverse_services(candidates, num_to_select):
+    """
+    Selecciona servicios diversos basándose en tipos/categorías.
+    """
+    if not candidates or num_to_select <= 0:
+        return []
+    
+    selected = []
+    selected_types = set()
+    
+    for service, score in candidates:
+        if len(selected) >= num_to_select:
+            break
+        
+        # Obtener tipo/categoría del servicio
+        service_type = _get_service_category(service)
+        
+        # Si es un tipo nuevo, agregarlo para diversidad
+        if service_type not in selected_types:
+            selected.append((service, score))
+            selected_types.add(service_type)
+    
+    # Si no conseguimos suficientes tipos diversos, completar con los restantes
+    if len(selected) < num_to_select:
+        remaining = num_to_select - len(selected)
+        # Agregar los que no están ya seleccionados
+        selected_ids = {get_service_key(service) for service, score in selected}
+        additional = [candidate for candidate in candidates if get_service_key(candidate[0]) not in selected_ids]
+        selected.extend(additional[:remaining])
+    
+    return selected
+
+
+def _get_service_category(service):
+    """
+    Obtiene una categoría para el servicio para diversificación.
+    """
+    # Priorizar tipo específico
+    if hasattr(service, 'type'):
+        return getattr(service, 'type', 'unknown')
+    
+    # Para ActivityService, usar categoría
+    if hasattr(service, 'category'):
+        return getattr(service, 'category', 'unknown')
+    
+    # Para Event, usar categoría o tipo
+    if hasattr(service, 'category'):
+        return getattr(service, 'category', 'unknown')
+    
+    # Fallback: usar clase del modelo
+    return service.__class__.__name__
 
 
 # ============================================================================
