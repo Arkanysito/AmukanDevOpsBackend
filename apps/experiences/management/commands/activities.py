@@ -110,31 +110,47 @@ class Command(BaseCommand):
 
         for tour in ACTIVIDADES:
             lon, lat = tour["coords"]
+            point = Point(lon, lat)
 
-            # Crear el lugar
-            place = Place.objects.create(
+            # Verificar si el lugar ya existe por nombre y coordenadas
+            place, place_created = Place.objects.get_or_create(
                 organization_id=organizacion,
                 name=tour["nombre"],
-                description=tour["detalles"],
-                address=tour["direccion"],
-                type=random.choice([choice[0] for choice in PlaceType.choices]),
-                coordinates=Point(lon, lat),  # (longitud, latitud)
-                schedule={"horario": tour["hora"]} if tour["hora"] else None,
+                coordinates=point,
+                defaults={
+                    "description": tour["detalles"],
+                    "address": tour["direccion"],
+                    "type": random.choice([choice[0] for choice in PlaceType.choices]),
+                    "schedule": {"horario": tour["hora"]} if tour["hora"] else None,
+                }
             )
 
-            # Crear la actividad
-            ActivityService.objects.create(
+            if place_created:
+                self.stdout.write(f"📍 Lugar '{tour['nombre']}' creado con coordenadas {tour['coords']}")
+            else:
+                self.stdout.write(f"ℹ️ Lugar '{tour['nombre']}' ya existía, se reutiliza")
+
+            # Verificar si la actividad ya existe
+            activity, activity_created = ActivityService.objects.get_or_create(
                 organization_id=organizacion,
                 name=tour["nombre"],
-                activity_type=ActivityType.HIKING,
-                duration_minutes=90,
-                guide_included=True,
-                details={"detalles": tour["detalles"]},
-                price=0,
-                price_currency=Currency.CLP,
+                defaults={
+                    "activity_type": ActivityType.WALKING_TOUR,
+                    "duration_minutes": 90,
+                    "guide_included": True,
+                    "details": {"detalles": tour["detalles"]},
+                    "price": 0,
+                    "price_currency": Currency.CLP,
+                    "place_id": place,
+                }
             )
 
-            self.stdout.write(f"🌍 Actividad '{tour['nombre']}' creada con coordenadas {tour['coords']}")
+            if activity_created:
+                self.stdout.write(f"🌍 Actividad '{tour['nombre']}' creada y asignada al lugar")
+            else:
+                # Si la actividad ya existía, también actualizamos el lugar por si acaso
+                activity.place_id = place
+                activity.save()
+                self.stdout.write(f"ℹ️ Actividad '{tour['nombre']}' ya existía, se actualizó el lugar")
 
-        self.stdout.write(self.style.SUCCESS("✅ Todas las actividades fueron cargadas exitosamente."))
-
+        self.stdout.write(self.style.SUCCESS("✅ Proceso de carga de actividades completado."))
