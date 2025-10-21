@@ -237,3 +237,4 @@ class ActivityType(models.TextChoices):
     SKIING = 'SKIING', 'Esquí'
     SHOPPING = 'SHOPPING', 'Compras'
     CLIMBING = 'CLIMBING', 'Escalada'
+    WALKING_TOUR = 'WALKING TOUR', 'Walking Tour'

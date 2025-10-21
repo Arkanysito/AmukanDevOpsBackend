@@ -1,5 +1,6 @@
 from django.utils import timezone
-from datetime import datetime
+from datetime import datetime, time, timedelta
+import pytz
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -46,7 +47,26 @@ class ItineraryPreviewView(APIView):
             # Hacer las fechas timezone-aware
             desde = timezone.make_aware(desde_dt)
             hasta = timezone.make_aware(hasta_dt)
-            
+
+            # Timezone de Chile
+            chile_tz = pytz.timezone('Chile/Continental')
+            hoy = timezone.now().astimezone(chile_tz).date()
+
+            desde_chile = desde.astimezone(chile_tz)
+            hasta_chile = hasta.astimezone(chile_tz)
+
+            if desde_chile.date() == hoy:
+                desde = timezone.now().astimezone(chile_tz)
+
+            if hasta_chile.date() == hoy:
+                hasta = chile_tz.localize(datetime.combine(hoy, time(23, 59, 59)))
+
+            elif hasta_chile.date() != hoy:
+                hasta = chile_tz.localize(datetime.combine(
+                    hasta_chile.date() + timedelta(days=1), 
+                    time(3, 0)
+                ))
+
             presupuesto = float(presupuesto)
             cantidad_personas = int(cantidad_personas)
             
