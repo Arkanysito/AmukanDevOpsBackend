@@ -3,7 +3,8 @@ from datetime import datetime
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from apps.travel.itineray_generator import generate_optimized_itineraries
+#from apps.travel.itineray_generator import generate_optimized_itineraries
+from apps.travel.services import generate_optimized_itineraries
 from apps.users.models import CustomUser
 from apps.core.constants import InteractionAction
 from apps.tracking.models import Interaction
@@ -32,7 +33,6 @@ class ItineraryPreviewView(APIView):
         cantidad_personas = data.get("cantidad_personas", 1)
         preferences = data.get("preferences", {})
         experiencias = data.get("experiencias", [])
-        tipo_usuario = data.get("tipo_usuario")
 
         # Validaciones
         if not all([destino, desde, hasta]):
@@ -63,13 +63,12 @@ class ItineraryPreviewView(APIView):
             travelers=cantidad_personas,
             preferences=preferences,
             experiencias=experiencias,
-            tipo_usuario=tipo_usuario
         )
 
         # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS (incluyendo experiencias)
         self._save_search_interaction(
             request, destino, desde, hasta, presupuesto, cantidad_personas, 
-            preferences, itinerarios, experiencias, tipo_usuario
+            preferences, itinerarios, experiencias
         )
 
         if not itinerarios.get('itineraries'):
@@ -85,7 +84,7 @@ class ItineraryPreviewView(APIView):
         
         return Response(response_data, status=status.HTTP_200_OK)
 
-    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios, experiencias=None, tipo_usuario=None):
+    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios, experiencias=None):
         """Guarda la búsqueda en la base de datos como una interacción (incluye experiencias)"""
         try:
             # Obtener información del usuario y sesión
@@ -101,8 +100,7 @@ class ItineraryPreviewView(APIView):
                     'presupuesto': presupuesto,
                     'cantidad_personas': cantidad_personas,
                     'preferences': preferences,
-                    'experiencias': experiencias or [],  # ✅ Nuevo: incluir experiencias
-                    'tipo_usuario': tipo_usuario         # ✅ Nuevo: incluir tipo de usuario
+                    'experiencias': experiencias or [],
                 },
                 'search_results': {
                     'itineraries_count': len(itinerarios.get('itineraries', [])) if isinstance(itinerarios, dict) and 'itineraries' in itinerarios else len(itinerarios) if isinstance(itinerarios, list) else 0,
@@ -445,7 +443,6 @@ class SaveItineraryView(APIView):
                     'total_budget': itinerario_data.get('presupuesto', 0),
                     'budget_utilization': itinerario_data.get('utilizacion_presupuesto', 0)
                 },
-                'traveler_type_used': itinerario_data.get('tipo_usuario'), 
                 'request_info': {
                     'ip_address': self._get_client_ip(request),
                     'user_agent': request.META.get('HTTP_USER_AGENT', ''),
@@ -481,13 +478,9 @@ class SaveItineraryView(APIView):
             servicios = itinerario_data.get('servicios', {})
             preferences = itinerario_data.get('preferences', {})
             experiencias = itinerario_data.get('experiencias', [])
-            traveler_type_used = itinerario_data.get('tipo_usuario')
             
             # 1. Actualizar intereses del usuario (incluyendo experiencias)
             self._update_user_interests(user, servicios, preferences, experiencias)
-            
-            # 2. Actualizar traveler type (considerando experiencias y tipo usado)
-            self._update_traveler_type(user, servicios, preferences, experiencias, traveler_type_used)
             
             logger.info(f"✅ Perfil actualizado para usuario: {user.email}")
             

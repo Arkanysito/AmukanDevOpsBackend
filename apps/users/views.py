@@ -14,7 +14,9 @@ from .serializers import (
     resolve_content_type_for_target_type,
 )
 
-
+from apps.tracking.models import Interaction
+from apps.core.constants import InteractionAction 
+from .tasks import run_profile_analysis_task, clear_user_vector_cache_task
 
 class CreateUserView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
@@ -217,17 +219,24 @@ class UserInterestsView(APIView):
         
         try:
             with transaction.atomic():
-                # Eliminar intereses existentes
                 UserInterest.objects.filter(user_id=user).delete()
                 
-                # Agregar nuevos intereses
+                new_interests = []
                 for interest_id in interest_ids:
                     interest = Interest.objects.get(interest_id=interest_id)
-                    UserInterest.objects.create(
-                        user_id=user,
-                        interest_id=interest,
-                        weight=1.0  # Peso por defecto
+                    new_interests.append(
+                        UserInterest(
+                            user_id=user,
+                            interest_id=interest,
+                            weight=1.0 # Peso por defecto
+                        )
                     )
+                UserInterest.objects.bulk_create(new_interests)
+            
+            # El usuario actualizó explícitamente sus intereses.
+            # No necesitamos "analizar", solo "actualizar" el caché.
+            clear_user_vector_cache_task.delay(user.id)
+            # ---------------------------------
                 
             return Response({"detail": "Intereses guardados correctamente"}, status=status.HTTP_200_OK)
             

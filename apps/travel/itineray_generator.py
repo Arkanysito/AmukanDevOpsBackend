@@ -1,4 +1,4 @@
-import random
+'''import random
 import numpy as np
 from datetime import datetime, time, timedelta
 from django.db.models import Q
@@ -1122,36 +1122,7 @@ class ItineraryOptimizer:
         """Determina si dos intervalos de tiempo se solapan"""
         return max(inicio1, inicio2) < min(fin1, fin2)
     
-    def _select_accommodation(self, strategy, accommodations):
-        """Selecciona alojamiento DESDE PLACE - para same-day, no incluir alojamiento"""
-        if self.is_same_day:
-            return None  # No alojamiento para same-day
-        
-        if not accommodations:
-            return None
-        
-        if strategy == 'budget':
-            # Ordenar por precio más bajo
-            return min(accommodations, key=lambda x: float(x.average_price) if x.average_price else float('inf'))
-        elif strategy == 'premium':
-            # Ordenar por rating más alto
-            return max(accommodations, key=lambda x: float(x.rating) if x.rating else 0)
-        else:
-            # Balanced: mejor relación rating/precio
-            best_value = None
-            best_ratio = -1
-            
-            for acc in accommodations:
-                if acc.average_price and acc.rating:
-                    price = float(acc.average_price)
-                    rating = float(acc.rating)
-                    if price > 0:
-                        ratio = rating / price
-                        if ratio > best_ratio:
-                            best_ratio = ratio
-                            best_value = acc
-            
-            return best_value or accommodations[0]
+    
     
     def _plan_meals(self, restaurants, strategy, meal_budget):
         """Planifica comidas, ajustando para same-day según hora actual"""
@@ -1600,4 +1571,4 @@ def _get_strategy_weights_by_tipo_usuario(tipo_usuario):
         'familiar': {'budget': 0.2, 'balanced': 0.6, 'premium': 0.2}
     }
     
-    return tipo_usuario_weights.get(tipo_usuario.lower() if tipo_usuario else '', strategy_weights)
+    return tipo_usuario_weights.get(tipo_usuario.lower() if tipo_usuario else '', strategy_weights)'''

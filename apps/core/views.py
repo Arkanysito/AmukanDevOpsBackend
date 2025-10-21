@@ -40,7 +40,7 @@ def get_org_dashboard_embed_url(request):
     
     signed_url = build_signed_embed_url_for_dashboard(
         dashboard_id=DASHBOARD_ID,
-        locked_parameters={"organization_id": str(org_uuid)},
+        locked_parameters={ },
         
     )
 
