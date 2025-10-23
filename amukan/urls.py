@@ -32,5 +32,6 @@ urlpatterns = [
     path("api/recommendations/", recommend_places_view, name="recommend_places"),
     path('api/auth/login/', login_view, name='login'),
     path('api/auth/user/', get_user_profile, name='user-profile'),
+    path('api/choices/', ChoicesView.as_view(), name='choices'),
 
 ]
