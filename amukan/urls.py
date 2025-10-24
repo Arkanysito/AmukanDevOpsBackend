@@ -19,6 +19,7 @@ from django.urls import path, include
 from apps.core.views import ChoicesView
 from apps.core.views import get_org_dashboard_embed_url
 from apps.recommendation.views import recommend_places_view
+from apps.core.views import upload_image
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -28,5 +29,7 @@ urlpatterns = [
     path('api-auth/', include("rest_framework.urls")),
     path("api/metabase/org-dashboard", get_org_dashboard_embed_url),
     path("api/experiences/", include("apps.experiences.urls")),
-    path("api/recommendations/", recommend_places_view, name="recommend_places")
+    path("api/recommendations/", recommend_places_view, name="recommend_places"),
+    path("api/uploads/direct", upload_image),
+    path('api/choices/', ChoicesView.as_view(), name='choices'),
 ]
