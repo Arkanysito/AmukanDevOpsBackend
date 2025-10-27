@@ -19,6 +19,8 @@ from .serializers import (
     resolve_content_type_for_target_type,
 )
 
+from apps.recommendation.services import invalidate_user_vector_cache
+
 # Importar modelos necesarios para la búsqueda ambigua
 from apps.experiences.models import ActivityService, Event
 from apps.location.models import Place
@@ -261,42 +263,43 @@ class UserInterestsView(APIView):
                       valid_interest_ids.append(UUID(str(interest_id)))
                  except ValueError:
                       logger.warning(f"ID de interés inválido '{interest_id}' recibido para usuario {user.id}")
-                      # return Response({"detail": f"ID de interés inválido: {interest_id}"}, status=status.HTTP_400_BAD_REQUEST)
                       continue # Ignorar IDs inválidos
 
             with transaction.atomic():
-                # Borrar intereses existentes
-                UserInterest.objects.filter(user_id=user).delete()
+                UserInterest.objects.filter(user_id=user).delete() # Borrar existentes
 
-                # Verificar que los intereses existan antes de crear
                 existing_interests = Interest.objects.filter(interest_id__in=valid_interest_ids).values_list('interest_id', flat=True)
                 interests_to_create = []
                 for interest_uuid in existing_interests:
                      interests_to_create.append(
                           UserInterest(
                                user_id=user,
-                               interest_id_id=interest_uuid, # Usar _id para eficiencia
-                               weight=1.0 # Peso por defecto
+                               interest_id_id=interest_uuid,
+                               weight=1.0
                           )
                      )
-
                 if interests_to_create:
                      UserInterest.objects.bulk_create(interests_to_create)
 
-            # Invalidar caché del vector de usuario
-            clear_user_vector_cache_task.delay(str(user.id)) # Asegurar que sea string si la task lo espera
+            # Invalidar caché del vector de usuario DIRECTAMENTE (sincrónico)
+            try:
+                 invalidate_user_vector_cache(user.id) # Llama a la función importada
+                 logger.info(f"Intereses guardados para {user.id}. Cache de vector invalidado sincrónicamente.")
+            except Exception as cache_err:
+                 # Loguea el error pero no detengas el flujo principal del registro
+                 logger.error(f"Error al invalidar cache sincrónicamente para user {user.id}: {cache_err}")
 
             return Response({"detail": "Intereses guardados correctamente"}, status=status.HTTP_200_OK)
 
-        except Interest.DoesNotExist: # Aunque filtramos, por si acaso
+        except Interest.DoesNotExist:
             return Response({"detail": "Uno o más intereses no existen"}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             logger.error(f"Error al guardar intereses para usuario {user.id}: {e}", exc_info=True)
             return Response({"detail": f"Error al guardar intereses: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
+        # ... (sin cambios) ...
         user = request.user
-        # Optimizar query
         user_interests = UserInterest.objects.filter(user_id=user).select_related('interest_id')
         interest_data = [{
             "id": str(interest.interest_id.interest_id),
