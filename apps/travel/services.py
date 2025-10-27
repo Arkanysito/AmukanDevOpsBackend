@@ -1,3 +1,5 @@
+# apps/travel/services.py
+
 import logging
 from .optimizer import ItineraryOptimizer
 from .validation import ItineraryValidator, ItineraryComparator
@@ -52,19 +54,11 @@ def analyze_budget_sensitivity(optimizer, budget_variations=[0.8, 1.0, 1.2]):
     return results
 
 def generate_optimized_itineraries(request, destination, start_date, end_date,
-                                   budget, travelers, preferences=None,
-                                   experiencias=None,
+                                   budget, travelers, experiencias=None,
                                    include_analytics=False):
     """
     Función principal para generar itinerarios optimizados con analytics opcionales
     """
-    
-    # 1. Integrar experiencias y tipo de usuario en las preferencias
-    enhanced_preferences = preferences.copy() if preferences else {}
-    
-    if experiencias:
-        enhanced_preferences['experiencias'] = experiencias
-        enhanced_preferences['categories'] = _map_experiencias_to_categories(experiencias)
     
     # 2. Inicializar y ejecutar el optimizador
     try:
@@ -75,6 +69,7 @@ def generate_optimized_itineraries(request, destination, start_date, end_date,
             end_date=end_date,
             budget=budget,
             travelers=travelers,
+            experiencias=experiencias
         )
         
         itineraries = optimizer.generate_optimized_itineraries(max_itineraries=3)

@@ -1,3 +1,5 @@
+# apps/travel/optimizer.py
+
 import logging
 import math
 import random
@@ -19,16 +21,14 @@ logger = logging.getLogger(__name__)
 
 class ItineraryOptimizer:
     
-    def __init__(self, user, destination, start_date, end_date, budget, travelers, preferences=None):
+    def __init__(self, user, destination, start_date, end_date, budget, travelers, experiencias=None):
         self.user = user
         self.destination = destination
         self.start_date = self._ensure_timezone_aware(start_date)
         self.end_date = self._ensure_timezone_aware(end_date)
         self.budget = budget
         self.travelers = travelers
-        self.preferences = preferences or {}
-        
-        self.experiencias = self.preferences.get('experiencias', [])
+        self.experiencias = experiencias or []
         
         self.current_time = timezone.now()
         self.is_same_day = self.start_date.date() == self.end_date.date()
@@ -226,7 +226,7 @@ class ItineraryOptimizer:
             return best_value or accommodations[0]
         
     def _plan_meals(self, restaurants, strategy, meal_budget):
-        """Planifica comidas, ajustando para same-day según hora actual"""
+        """Planifica comidas, ajustando para same-day según hora actual y presupuesto cero"""
         meals = []
         meal_costs = {
             'budget': {'breakfast': 5, 'lunch': 10, 'dinner': 15},
@@ -234,7 +234,12 @@ class ItineraryOptimizer:
             'premium': {'breakfast': 15, 'lunch': 25, 'dinner': 40}
         }
         
-        costs = meal_costs[strategy]
+        # Si el presupuesto es 0, los costos de comida genéricos son 0
+        if self.budget == 0:
+            costs = {'breakfast': 0, 'lunch': 0, 'dinner': 0}
+        else:
+            costs = meal_costs[strategy]
+            
         current_hour = self.current_time.hour if self.is_same_day and self.current_time else None
         
         if not restaurants:
@@ -290,8 +295,11 @@ class ItineraryOptimizer:
                 restaurant = selected_restaurants[restaurant_idx]
                 
                 # Calcular costo BASADO EN average_price DE PLACE
-                if hasattr(restaurant, 'average_price') and restaurant.average_price:
+                # Si no hay average_price y el presupuesto es 0, el costo es 0.
+                if hasattr(restaurant, 'average_price') and restaurant.average_price is not None:
                     cost = float(restaurant.average_price) * self.travelers
+                elif self.budget == 0:
+                    cost = 0 # Asumir gratuito si el presupuesto es 0 y no hay precio
                 else:
                     cost = costs[meal_type] * self.travelers
                 
@@ -326,6 +334,7 @@ class ItineraryOptimizer:
         for event in sorted_events:
             event_cost = float(event.price) * self.travelers
             
+            # Acepta el evento si el costo es 0, incluso si el presupuesto es 0
             if event_cost <= remaining_budget:
                 event_start = self._ensure_timezone_aware(event.start_date)
                 event_end = self._ensure_timezone_aware(event.end_date)
@@ -573,11 +582,16 @@ class ItineraryOptimizer:
         
         return scheduled
     
-    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, restaurants, events, time_windows):
+    def _generate_strategy_itinerary(self, strategy, accommodations, activities_with_scores, 
+                                     restaurants, events, time_windows, 
+                                     exclude_activity_ids=None):
         """
         Genera un itinerario para una estrategia específica, considerando tipo de usuario
-        (Esta es la versión unificada de la función que tenías duplicada)
+        Y excluyendo IDs de actividades para fomentar la diversidad.
         """
+        if exclude_activity_ids is None:
+            exclude_activity_ids = set()
+            
         effective_strategy = strategy
         items = []
         total_cost = 0
@@ -587,17 +601,20 @@ class ItineraryOptimizer:
             acc = self._select_accommodation(effective_strategy, accommodations)
             if acc:
                 acc_cost = self._calculate_accommodation_cost(acc, effective_strategy)
-                items.append({
-                    'service': acc, 'type': 'accommodation', 'cost': acc_cost,
-                    'date': self.start_date, 'duration_days': self.nights
-                })
-                total_cost += acc_cost
+                # Solo agregar alojamiento si entra en el presupuesto
+                if acc_cost <= self.budget:
+                    items.append({
+                        'service': acc, 'type': 'accommodation', 'cost': acc_cost,
+                        'date': self.start_date, 'duration_days': self.nights
+                    })
+                    total_cost += acc_cost
                 
         # 2. Planificar comidas
         meal_budget_ratio = constants.DEFAULT_MEAL_BUDGET_RATIO
         meal_budget = self.budget * meal_budget_ratio
         meal_plan = self._plan_meals(restaurants, effective_strategy, meal_budget)
         for meal in meal_plan:
+            # Lógica de presupuesto: solo agrega si cabe
             if total_cost + meal['cost'] <= self.budget:
                 items.append(meal)
                 total_cost += meal['cost']
@@ -606,6 +623,7 @@ class ItineraryOptimizer:
         activities_events_budget = self.budget - total_cost
         
         # 4. Procesar Eventos (Prioritarios)
+        # _process_events ya filtra por presupuesto (incluyendo 0)
         scheduled_events, remaining_budget, _ = self._process_events(
             events, time_windows, activities_events_budget
         )
@@ -621,19 +639,41 @@ class ItineraryOptimizer:
         ]
         
         # 6. Resolver Problema de Orientación (El núcleo)
+        # Pasa la estrategia y los IDs a excluir
         selected_activities = optimization_core.solve_orienteeering_problem(
             self, # Pasa la instancia para acceder a caches y helpers
             activities_with_scores, 
             available_time_windows, 
-            remaining_budget
+            remaining_budget,
+            strategy=strategy,
+            exclude_activity_ids=exclude_activity_ids
         )
         
         # 7. Asignar actividades
-        scheduled_activities = self._schedule_activities(selected_activities, available_time_windows)
-        for activity in scheduled_activities:
+        newly_used_activity_ids = set()
+        for activity in selected_activities:
+            # Doble chequeo de presupuesto
             if total_cost + activity['cost'] <= self.budget:
-                items.append(activity)
+                
+                # Leer la etiqueta del data_provider
+                is_place_activity = getattr(activity['activity'], '_is_place_activity', False)
+                activity_type = 'place_activity' if is_place_activity else 'activity'
+
+                items.append({
+                    'service': activity['activity'],
+                    'type': activity_type,
+                    'cost': activity['cost'],
+                    'date': activity['start_time'], # 'start_time' es agregado por el nuevo core
+                    'start_time': activity['start_time'],
+                    'end_time': activity['end_time'],
+                    'duration_hours': activity['duration'] / 60
+                })
                 total_cost += activity['cost']
+                
+                # Guardar ID para la próxima iteración de diversidad
+                # 'service_id' fue adaptado en el data_provider
+                if hasattr(activity['activity'], 'service_id'):
+                    newly_used_activity_ids.add(activity['activity'].service_id)
                 
         return {
             'items': items,
@@ -642,6 +682,7 @@ class ItineraryOptimizer:
             'original_strategy': strategy,
             'budget_utilization': total_cost / self.budget if self.budget > 0 else 0,
             'experiencias_applied': self.experiencias,
+            'activity_ids': newly_used_activity_ids, # Devolver IDs usados
         }
 
     def generate_optimized_itineraries(self, max_itineraries=3):
@@ -652,32 +693,38 @@ class ItineraryOptimizer:
             return []
         
         # 1. Obtener todos los candidatos usando el data_provider
-        accommodations = data_provider.get_accommodations(self.user, self.zone, top_k=10)
+        accommodations = data_provider.get_accommodations(self.user, self.zone)
+        # Esta función ahora devuelve (ActivityService + Place)
         activities_with_scores = data_provider.get_activities_with_scores(
-            self.user, self.zone, self.experiencias, top_k=50
+            self.user, self.zone, self.experiencias
         )
-        restaurants = data_provider.get_restaurants(self.user, self.zone, top_k=20)
+        restaurants = data_provider.get_restaurants(self.user, self.zone)
         events = data_provider.get_events(
             self.user, self.zone, self.start_date, self.end_date,
             self.is_same_day, self.current_time,
-            self._is_night_event, self._ensure_timezone_aware, self._hay_solapamiento,
-            top_k=15
+            self._is_night_event, self._ensure_timezone_aware, self._hay_solapamiento
         )
         time_windows = self._create_time_windows()
         
         self.performance_metrics['candidate_activities'] = len(activities_with_scores)
         
-        # 2. Generar itinerarios
+        # 2. Generar itinerarios con LÓGICA DE DIVERSIDAD
         itineraries = []
         strategies = ['budget', 'balanced', 'premium']
+        
+        # Set para guardar todos los IDs de actividades usados en iteraciones previas
+        all_used_activity_ids = set()
         
         for strategy in strategies[:max_itineraries]:
             itinerary = self._generate_strategy_itinerary(
                 strategy, accommodations, activities_with_scores,
-                restaurants, events, time_windows
+                restaurants, events, time_windows,
+                exclude_activity_ids=all_used_activity_ids # Pasar IDs ya usados
             )
             if itinerary:
                 itineraries.append(itinerary)
+                # Actualizar el set con los IDs recién usados
+                all_used_activity_ids.update(itinerary.get('activity_ids', set()))
                 
         # 3. Calcular métricas finales
         self.performance_metrics['end_time'] = timezone.now()
@@ -706,6 +753,3 @@ class ItineraryOptimizer:
                 'execution_time_ms': self.performance_metrics.get('execution_time', 0) * 1000
             }
         }
-    
-    
-    

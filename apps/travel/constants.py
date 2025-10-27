@@ -1,5 +1,19 @@
 from apps.core.constants import PlaceType
 
+DEFAULT_ACTIVITY_DURATION_MINUTES = 90
+
+# Duración por defecto para 'Places' (ej. Malls, Museos) en minutos
+DEFAULT_PLACE_DURATION_MINUTES = 90
+
+# Penalización a aplicar a actividades ya usadas en otros itinerarios
+DIVERSITY_PENALTY = 0.5
+
+# Multiplicador para dar prioridad a los 'Place' sobre 'ActivityService'
+PLACE_PRIORITY_BOOST = 1.15 # Dar un 15% de ventaja a los Places
+
+# Bonus para items que el usuario ha marcado como favoritos
+FAVORITE_MATCH_BONUS = 1.5 
+
 # --- Estrategia y Perfil de Usuario ---
 STRATEGY_ADJUSTMENTS_BY_USER_TYPE = {
     'mochilero': 'budget',
@@ -33,7 +47,7 @@ MEAL_COSTS_BY_STRATEGY = {
 }
 
 # --- Optimización ---
-MAX_TRAVEL_TIME_MINUTES = 20 # Minutos máximo entre actividades
+MAX_TRAVEL_TIME_MINUTES = 60 # Minutos máximo entre actividades
 
 # --- Mapeo de Experiencias y Categorías ---
 EXPERIENCIA_MATCH_BONUS = 1.3 # 30% de bonus

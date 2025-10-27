@@ -1,3 +1,5 @@
+# apps/travel/views.py
+
 from django.utils import timezone
 from datetime import datetime, time, timedelta
 import pytz
@@ -18,7 +20,7 @@ import uuid
 import logging
 from apps.core.constants import UserRole
 from apps.experiences.models import Event, AccommodationService, ActivityService
-from apps.location.models import Place 
+from apps.location.models import Place
 from rest_framework import generics
 from django.db.models import Prefetch
 
@@ -32,7 +34,7 @@ class ItineraryPreviewView(APIView):
         hasta = data.get("hasta")
         presupuesto = data.get("presupuesto", 0)
         cantidad_personas = data.get("cantidad_personas", 1)
-        preferences = data.get("preferences", {})
+        # 'preferences' ya no se usa, solo 'experiencias'
         experiencias = data.get("experiencias", [])
 
         # Validaciones
@@ -43,7 +45,7 @@ class ItineraryPreviewView(APIView):
             # Convertir strings a datetime
             desde_dt = datetime.fromisoformat(desde.replace('Z', '+00:00'))
             hasta_dt = datetime.fromisoformat(hasta.replace('Z', '+00:00'))
-            
+
             # Hacer las fechas timezone-aware
             desde = timezone.make_aware(desde_dt)
             hasta = timezone.make_aware(hasta_dt)
@@ -81,14 +83,13 @@ class ItineraryPreviewView(APIView):
             end_date=hasta,
             budget=presupuesto,
             travelers=cantidad_personas,
-            preferences=preferences,
             experiencias=experiencias,
         )
 
-        # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS (incluyendo experiencias)
+        # GUARDAR LA BÚSQUEDA EN LA BASE DE DATOS
         self._save_search_interaction(
-            request, destino, desde, hasta, presupuesto, cantidad_personas, 
-            preferences, itinerarios, experiencias
+            request, destino, desde, hasta, presupuesto, cantidad_personas,
+            itinerarios, experiencias
         )
 
         if not itinerarios.get('itineraries'):
@@ -101,16 +102,16 @@ class ItineraryPreviewView(APIView):
         response_data = self._format_itineraries_for_frontend(
             itinerarios, destino, desde, hasta, cantidad_personas
         )
-        
+
         return Response(response_data, status=status.HTTP_200_OK)
 
-    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, preferences, itinerarios, experiencias=None):
+    def _save_search_interaction(self, request, destino, desde, hasta, presupuesto, cantidad_personas, itinerarios, experiencias=None):
         """Guarda la búsqueda en la base de datos como una interacción (incluye experiencias)"""
         try:
             # Obtener información del usuario y sesión
             user = request.user if request.user.is_authenticated else None
             session_id = self._get_session_id(request)
-            
+
             # Preparar metadata de la búsqueda
             metadata = {
                 'search_parameters': {
@@ -119,7 +120,6 @@ class ItineraryPreviewView(APIView):
                     'hasta': hasta.isoformat() if hasattr(hasta, 'isoformat') else str(hasta),
                     'presupuesto': presupuesto,
                     'cantidad_personas': cantidad_personas,
-                    'preferences': preferences,
                     'experiencias': experiencias or [],
                 },
                 'search_results': {
@@ -183,8 +183,8 @@ class ItineraryPreviewView(APIView):
                 costs = [itinerario.get('total_cost', 0) for itinerario in itinerarios]
             else:
                 return {'min': 0, 'max': 0}
-            
-            valid_costs = [cost for cost in costs if cost and cost > 0]
+
+            valid_costs = [cost for cost in costs if cost is not None and cost > 0] # Check for None
             if valid_costs:
                 return {
                     'min': min(valid_costs),
@@ -199,7 +199,7 @@ class ItineraryPreviewView(APIView):
         """Obtiene las estrategias disponibles en los resultados"""
         if not itinerarios:
             return []
-        
+
         try:
             if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
                 strategies = [itinerario.get('strategy', 'unknown') for itinerario in itinerarios['itineraries']]
@@ -207,7 +207,7 @@ class ItineraryPreviewView(APIView):
                 strategies = [itinerario.get('strategy', 'unknown') for itinerario in itinerarios]
             else:
                 return []
-            
+
             return list(set(strategies))  # Remover duplicados
         except (KeyError, TypeError):
             return []
@@ -216,108 +216,149 @@ class ItineraryPreviewView(APIView):
         """Formatea los itinerarios agregando número de día a cada servicio"""
         formatted_itineraries = []
         dias_totales = max(1, (hasta - desde).days + 1)
-        
+
         # Asegurarse de que estamos accediendo a la lista correcta
         if isinstance(itinerarios, dict) and 'itineraries' in itinerarios:
             itinerarios_list = itinerarios['itineraries']
+        elif isinstance(itinerarios, list):
+             itinerarios_list = itinerarios
         else:
-            itinerarios_list = itinerarios
-        
+             itinerarios_list = [] # Asegurar que sea una lista
+
         for idx, itinerario in enumerate(itinerarios_list):
+            # Volver a la estructura original sin "lugares"
             servicios = {
                 "hospedaje": [],
                 "transporte": [],
                 "comida": [],
                 "actividades": [],
                 "eventos": []
+                # "lugares": [] -> Eliminado
             }
-            
+
             # Verificar que itinerario tenga la estructura esperada
             if isinstance(itinerario, dict) and 'items' in itinerario:
                 for item in itinerario["items"]:
                     servicio_formateado = self._format_service_item(item)
-                    
+
                     # Agregar número de día al servicio
                     dia_numero = self._obtener_numero_dia(item, desde)
                     servicio_formateado["dia"] = dia_numero
-                    
+
                     # Mapear tipos al formato que espera el frontend
                     tipo_frontend = self._map_service_type_to_frontend(item['type'])
-                    if tipo_frontend:
+                    if tipo_frontend and tipo_frontend in servicios:
                         servicios[tipo_frontend].append(servicio_formateado)
+                    elif tipo_frontend:
+                        logger.warning(f"Tipo frontend '{tipo_frontend}' (mapeado desde '{item['type']}') no encontrado en diccionario 'servicios'")
 
                 # Calcular duración
                 if dias_totales == 1:
                     duracion = "1 día"
                 else:
-                    duracion = f"{dias_totales} días / {dias_totales - 1} noches"
+                    duracion = f"{dias_totales} días / {max(0, dias_totales - 1)} noches" # Asegurar noches >= 0
 
                 formatted_itineraries.append({
                     "id": idx + 1,
                     "titulo": f"Itinerario {idx+1} para {destino} ({itinerario.get('strategy', 'standard')})",
                     "duracion": duracion,
                     "cantidad_personas": cantidad_personas,
-                    "presupuesto": float(itinerario["total_cost"]),
+                    "presupuesto": float(itinerario.get("total_cost", 0)), # Usar .get con default
                     "utilizacion_presupuesto": float(itinerario.get("budget_utilization", 0)),
                     "servicios": servicios
                 })
-        
+
         return formatted_itineraries
-    
+
     def _obtener_numero_dia(self, item, start_date):
         """Obtiene el número de día basado en la fecha del item"""
         item_date = item.get('date')
         if not item_date:
             return 1  # Default al primer día
-        
+
+        # Asegurarse que start_date sea timezone-aware
+        if start_date and not timezone.is_aware(start_date):
+             start_date = timezone.make_aware(start_date, timezone.get_current_timezone())
+
+        # Asegurarse que item_date sea timezone-aware
         if isinstance(item_date, str):
             item_date = datetime.fromisoformat(item_date.replace('Z', '+00:00'))
-        
-        # Calcular diferencia de días
-        diferencia = (item_date.date() - start_date.date()).days
-        return max(1, diferencia + 1)
-    
+        elif isinstance(item_date, datetime) and not timezone.is_aware(item_date):
+             item_date = timezone.make_aware(item_date, timezone.get_current_timezone())
+
+        if not isinstance(item_date, datetime) or not start_date:
+             logger.warning(f"No se pudo calcular el día para el item: {item}. Usando día 1.")
+             return 1
+
+        # Calcular diferencia de días (usando .date() para ignorar horas)
+        try:
+             diferencia = (item_date.date() - start_date.date()).days
+             return max(1, diferencia + 1)
+        except Exception as e:
+             logger.error(f"Error calculando diferencia de días: {e}. Item date: {item_date}, Start date: {start_date}")
+             return 1
+
+
     def _map_service_type_to_frontend(self, backend_type):
         """Mapea los tipos del backend a los que espera el frontend"""
+        # Mapear 'activity' y 'place_activity' a 'actividades'
         type_mapping = {
             'accommodation': 'hospedaje',
             'dining': 'comida',
             'activity': 'actividades',
+            'place_activity': 'actividades', # Mapeado a actividades
             'transport': 'transporte',
-            'event': 'eventos'
+            'event': 'eventos',
+            # 'place_activity': 'lugares'
         }
         return type_mapping.get(backend_type)
-    
+
     def _format_service_item(self, item):
         """Formatea un item de servicio para la respuesta"""
         service = item.get('service')
-        
+        item_cost = item.get('cost', 0.0) # Default a 0.0
+
         if service is None:
             # Servicio genérico (fallback)
             formatted_service = {
-                "nombre": item.get('description', 'Servicio'),
+                "nombre": item.get('description', 'Servicio'), # Usar description si existe
                 "descripcion": item.get('description', 'Servicio incluido en el itinerario'),
                 "rating": 0.0,
-                "fecha": item['date'].isoformat() if 'date' in item else None,
-                "costo": float(item['cost']),
+                "fecha": item['date'].isoformat() if 'date' in item and item['date'] else None,
+                "costo": float(item_cost), # Usar item_cost
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
                 "tipo_comida": item.get('meal_type')
             }
         else:
             # Servicio de la base de datos
+            # ID: 'service_id' (ActivityService, Accomm...) o 'place_id' (Place) o 'event_id'
+            service_id_val = getattr(service, 'service_id', None)
+            place_id_val = getattr(service, 'place_id', None)
+            event_id_val = getattr(service, 'event_id', None)
+            # Determinar el ID primario según el tipo inferido o real
+            if isinstance(service, ActivityService) or isinstance(service, AccommodationService):
+                 service_id = service_id_val
+            elif isinstance(service, Place):
+                 service_id = place_id_val
+            elif isinstance(service, Event):
+                 service_id = event_id_val
+            else: # Fallback si no podemos determinar el tipo exacto
+                 service_id = service_id_val or place_id_val or event_id_val or ''
+
+
             formatted_service = {
-                "id": str(getattr(service, 'service_id', getattr(service, 'place_id', getattr(service, 'event_id', '')))),
+                "id": str(service_id),
                 "nombre": getattr(service, 'name', 'Servicio'),
                 "descripcion": getattr(service, 'description', ''),
                 "rating": float(getattr(service, 'rating', 0.0)),
-                "fecha": item['date'].isoformat() if 'date' in item else None,
-                "costo": float(item['cost']),
+                "fecha": item['date'].isoformat() if 'date' in item and item['date'] else None,
+                "costo": float(item_cost), # Usar item_cost
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
                 "tipo_comida": item.get('meal_type')
             }
-        
+
         # Para eventos, agregar información específica
         if item.get('type') == 'event' and hasattr(service, 'start_date'):
             formatted_service.update({
@@ -325,52 +366,81 @@ class ItineraryPreviewView(APIView):
                 "fecha_fin": service.end_date.isoformat() if service.end_date else None,
                 "es_evento": True
             })
-        
-        # Asegurarse de que las coordenadas estén en formato WKT
-        if formatted_service["coordenadas"] and isinstance(formatted_service["coordenadas"], dict):
-            point = formatted_service["coordenadas"]
-            formatted_service["coordenadas"] = f"POINT({point['lng']} {point['lat']})"
-        
+
+        # Asegurarse de que las coordenadas estén en formato WKT si existen
+        coords = formatted_service["coordenadas"]
+        if coords and isinstance(coords, dict):
+            try:
+                # Intentar convertir a WKT, manejar posible error si faltan keys
+                lng = coords.get('lng', 'N/A')
+                lat = coords.get('lat', 'N/A')
+                if lng != 'N/A' and lat != 'N/A':
+                     formatted_service["coordenadas"] = f"POINT({lng} {lat})"
+                else:
+                     logger.warning(f"Coordenadas incompletas para {formatted_service.get('nombre')}: {coords}")
+                     formatted_service["coordenadas"] = None # O un valor por defecto
+            except Exception as e:
+                logger.error(f"Error convirtiendo coordenadas a WKT para {formatted_service.get('nombre')}: {e}")
+                formatted_service["coordenadas"] = None # Fallback a None
+        elif isinstance(coords, str) and not coords.startswith("POINT"):
+             # Si es string pero no WKT, intentar limpiarlo o poner None
+             logger.warning(f"Formato de coordenadas inesperado (string no WKT) para {formatted_service.get('nombre')}: {coords}")
+             formatted_service["coordenadas"] = None
+
+
         return formatted_service
-    
+
     def _get_coordinates(self, obj):
         """Obtiene las coordenadas de un objeto en formato consistente"""
         if obj is None:
             return None
-            
+
         # Intentar diferentes formas de obtener coordenadas
         coordinates = None
-        
-        # 1. Coordenadas directas del objeto
+
+        # 1. Coordenadas directas del objeto (Place)
         if hasattr(obj, 'coordinates') and obj.coordinates:
             coordinates = obj.coordinates
-        # 2. Coordenadas a través de place_id
+        # 2. Coordenadas a través de place_id (ActivityService, Event)
         elif hasattr(obj, 'place_id') and hasattr(obj.place_id, 'coordinates') and obj.place_id.coordinates:
             coordinates = obj.place_id.coordinates
-        
-        # Convertir a formato consistente
+
+        # Convertir a formato consistente {lat: Y, lng: X}
         if coordinates:
             if hasattr(coordinates, 'x') and hasattr(coordinates, 'y'):
-                return {"lat": coordinates.y, "lng": coordinates.x}
+                # Es un PointField de GeoDjango
+                return {"lat": float(coordinates.y), "lng": float(coordinates.x)}
             elif hasattr(coordinates, 'wkt'):
-                return coordinates.wkt
-        
+                 # Es un string WKT, intentar parsearlo
+                 try:
+                      import re
+                      match = re.match(r'POINT\(\s*([-\d.]+)\s+([-\d.]+)\s*\)', coordinates.wkt)
+                      if match:
+                           lng, lat = match.groups()
+                           return {"lat": float(lat), "lng": float(lng)}
+                 except Exception as e:
+                      logger.error(f"Error parseando WKT: {coordinates.wkt} - {e}")
+            elif isinstance(coordinates, dict) and 'lat' in coordinates and 'lng' in coordinates:
+                 # Ya está en el formato deseado
+                 return coordinates
+
+        logger.warning(f"No se pudieron obtener coordenadas válidas para el objeto: {obj}")
         return None
 
 class SaveItineraryView(APIView):
     def post(self, request):
         logger.info("✅ SaveItineraryView llamado")
-        
+
         try:
             data = request.data
             user = request.user
-            
+
             if not user.is_authenticated:
                 return Response(
-                    {"error": "Debe estar autenticado para guardar itinerarios"}, 
+                    {"error": "Debe estar autenticado para guardar itinerarios"},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
-            
+
             required_fields = ['name', 'itinerario_data']
             for field in required_fields:
                 if field not in data:
@@ -378,7 +448,7 @@ class SaveItineraryView(APIView):
                         {"error": f"Campo requerido faltante: {field}"},
                         status=status.HTTP_400_BAD_REQUEST
                     )
-            
+
             with transaction.atomic():
                 # Crear el itinerario
                 itinerary = Itinerary.objects.create(
@@ -386,23 +456,24 @@ class SaveItineraryView(APIView):
                     is_shared=data.get('is_shared', False)
                 )
                 logger.info(f"📝 Itinerario creado: {itinerary.itinerary_id}")
-                
+
                 # Agregar al usuario como colaborador
                 ItineraryCollaborator.objects.create(
                     user_id=user,
                     itinerary_id=itinerary,
                     role=UserRole.OWNER
                 )
-                
+
                 # Procesar items del itinerario
+                # NOTA: Esta función necesita ser revisada para manejar la mezcla de tipos en 'actividades'
                 items_creados = self._create_itinerary_items(itinerary, data['itinerario_data'])
-                
+
                 # GUARDAR INTERACCIÓN DE GUARDADO DE ITINERARIO
                 self._save_itinerary_save_interaction(request, itinerary, data['itinerario_data'], items_creados)
-                
+
                 # ACTUALIZAR PERFIL DEL USUARIO BASADO EN EL ITINERARIO (INCLUYENDO EXPERIENCIAS)
                 self._update_user_profile_from_itinerary(user, data['itinerario_data'])
-                
+
                 return Response({
                     "message": "Itinerario guardado exitosamente",
                     "itinerary_id": str(itinerary.itinerary_id),
@@ -410,14 +481,14 @@ class SaveItineraryView(APIView):
                     "items_count": len(items_creados),
                     "items_by_type": {k: len(v) for k, v in data['itinerario_data'].get('servicios', {}).items()}
                 }, status=status.HTTP_201_CREATED)
-                
+
         except Exception as e:
-            logger.error(f"❌ Error al guardar itinerario: {str(e)}")
+            logger.error(f"❌ Error al guardar itinerario: {str(e)}", exc_info=True) # Añadir exc_info
             return Response(
                 {"error": f"Error al guardar itinerario: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-        
+
     def _get_session_id(self, request):
         """Obtiene el session_id de la request"""
         if hasattr(request, 'session') and request.session.session_key:
@@ -428,7 +499,7 @@ class SaveItineraryView(APIView):
             # Generar un session_id único para usuarios anónimos
             import uuid
             return f"anon_{uuid.uuid4().hex[:16]}"
-    
+
     def _get_client_ip(self, request):
         """Obtiene la IP real del cliente"""
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -437,18 +508,18 @@ class SaveItineraryView(APIView):
         else:
             ip = request.META.get('REMOTE_ADDR')
         return ip
-    
+
     def _save_itinerary_save_interaction(self, request, itinerary, itinerario_data, items_creados):
         """Guarda la interacción de guardado de itinerario incluyendo experiencias"""
         try:
             user = request.user if request.user.is_authenticated else None
             session_id = self._get_session_id(request)
-            
+
             # Extraer información relevante para el perfilado
             servicios = itinerario_data.get('servicios', {})
-            preferences = itinerario_data.get('preferences', {})
-            experiencias = itinerario_data.get('experiencias', []) 
-            
+            # 'preferences' ya no se usa
+            experiencias = itinerario_data.get('experiencias', [])
+
             metadata = {
                 'itinerary_info': {
                     'itinerary_id': str(itinerary.itinerary_id),
@@ -456,7 +527,7 @@ class SaveItineraryView(APIView):
                     'total_items': len(items_creados),
                     'items_by_type': {k: len(v) for k, v in servicios.items()}
                 },
-                'user_preferences': preferences,
+                # 'user_preferences': preferences, # Eliminado
                 'experiencias_seleccionadas': experiencias,
                 'service_distribution': self._analyze_service_distribution(servicios),
                 'budget_info': {
@@ -469,7 +540,7 @@ class SaveItineraryView(APIView):
                     'timestamp': timezone.now().isoformat()
                 }
             }
-            
+
             # Crear la interacción
             interaction = Interaction.objects.create(
                 user_id=user,
@@ -481,45 +552,46 @@ class SaveItineraryView(APIView):
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 metadata=metadata
             )
-            
+
             logger.info(f"✅ Interacción de guardado registrada: {interaction.interaction_id}")
             return interaction
-            
+
         except Exception as e:
             logger.error(f"❌ Error al guardar interacción de itinerario: {str(e)}")
             return None
-    
+
     def _update_user_profile_from_itinerary(self, user, itinerario_data):
         """Actualiza el perfil del usuario basado en el itinerario guardado (incluye experiencias)"""
         try:
             if not user.is_authenticated:
                 return
-            
+
             servicios = itinerario_data.get('servicios', {})
-            preferences = itinerario_data.get('preferences', {})
+            # 'preferences' ya no se usa
             experiencias = itinerario_data.get('experiencias', [])
-            
+
             # 1. Actualizar intereses del usuario (incluyendo experiencias)
-            self._update_user_interests(user, servicios, preferences, experiencias)
-            
+            # Volvemos a pasar solo 'servicios' y 'experiencias'
+            self._update_user_interests(user, servicios, experiencias)
+
             logger.info(f"✅ Perfil actualizado para usuario: {user.email}")
-            
+
         except Exception as e:
             logger.error(f"❌ Error actualizando perfil de usuario: {str(e)}")
-    
-    def _update_user_interests(self, user, servicios, preferences, experiencias):
-        """Actualiza los intereses del usuario basado en servicios, preferencias y EXPERIENCIAS"""
+
+    def _update_user_interests(self, user, servicios, experiencias):
+        """Actualiza los intereses del usuario basado en servicios y EXPERIENCIAS"""
         try:
-            # Mapeo de tipos de servicio a intereses
+            # Volver a la versión sin 'lugares'
             service_to_interest = {
-                'actividades': ['Aventura', 'Cultura', 'Naturaleza', 'Deportes'],
+                'actividades': ['Aventura', 'Cultura', 'Naturaleza', 'Deportes', 'Urbano', 'Compras', 'Relax'], # Combinado
+                # 'lugares': ['Cultura', 'Urbano', 'Compras', 'Relax', 'Naturaleza'], -> Eliminado
                 'eventos': ['Cultura', 'Música', 'Arte', 'Deportes'],
                 'hospedaje': ['Lujo', 'Económico', 'Aventura', 'Relax'],
                 'comida': ['Gastronomía', 'Local', 'Internacional'],
                 'transporte': ['Aventura', 'Confort', 'Económico']
             }
-            
-            # Mapeo de experiencias a intereses
+
             experiencia_to_interest = {
                 'Aventura': ['Aventura', 'Naturaleza', 'Deportes', 'Extremo'],
                 'Cultura': ['Cultura', 'Arte', 'Historia', 'Tradiciones'],
@@ -530,105 +602,86 @@ class SaveItineraryView(APIView):
                 'Familiar': ['Familia', 'Niños', 'Diversión', 'Seguro'],
                 'Romántico': ['Romántico', 'Lujo', 'Intimidad', 'Relax']
             }
-            
-            # Intereses detectados en este itinerario
+
             detected_interests = set()
-            
+
             # 1. Analizar distribución de servicios
-            for service_type, services in servicios.items():
-                if service_type in service_to_interest and services:
+            for service_type, service_list in servicios.items(): # Renombrado a service_list
+                if service_type in service_to_interest and service_list: # Chequear si la lista no está vacía
                     detected_interests.update(service_to_interest[service_type])
-            
-            # 2. Analizar EXPERIENCIAS seleccionadas (MUY IMPORTANTE)
+
+            # 2. Analizar EXPERIENCIAS seleccionadas
             for experiencia in experiencias:
                 if experiencia in experiencia_to_interest:
                     detected_interests.update(experiencia_to_interest[experiencia])
-                    # Las experiencias tienen mayor peso, así que las agregamos dos veces
                     detected_interests.update(experiencia_to_interest[experiencia])
-            
-            # 3. Analizar preferencias explícitas
-            if preferences.get('adventure', False):
-                detected_interests.add('Aventura')
-            if preferences.get('cultural', False):
-                detected_interests.add('Cultura')
-            if preferences.get('gastronomy', False):
-                detected_interests.add('Gastronomía')
-            if preferences.get('relax', False):
-                detected_interests.add('Relax')
-            
-            # Actualizar pesos de intereses existentes o crear nuevos
+
+            # Actualizar pesos de intereses
             from apps.users.models import Interest, UserInterest
             from decimal import Decimal
-            
+
             for interest_name in detected_interests:
                 interest, created = Interest.objects.get_or_create(name=interest_name)
-                
+
                 user_interest, created = UserInterest.objects.get_or_create(
                     user_id=user,
                     interest_id=interest,
-                    defaults={'weight': Decimal('0.1')}  # Peso inicial como Decimal
+                    defaults={'weight': Decimal('0.1')}
                 )
-                
+
                 if not created:
-                    # Incrementar peso existente (máximo 1.0)
-                    # Las experiencias tienen mayor incremento
-                    # Usar Decimal para los incrementos también
+                    # Incrementar peso
                     if any(exp in interest_name for exp in experiencias):
-                        increment = Decimal('0.08')  # Experiencias: mayor incremento
+                        increment = Decimal('0.08')
                     else:
-                        increment = Decimal('0.05')  # Servicios: incremento normal
-                    
+                        increment = Decimal('0.05')
+
                     new_weight = min(user_interest.weight + increment, Decimal('1.0'))
                     user_interest.weight = new_weight
                     user_interest.save()
-                
+
         except Exception as e:
             logger.error(f"❌ Error actualizando intereses: {str(e)}")
-    
-    def _update_traveler_type(self, user, servicios, preferences, experiencias, traveler_type_used):
+
+    def _update_traveler_type(self, user, servicios, experiencias, traveler_type_used):
         """Actualiza el traveler type basado en patrones detectados (incluye experiencias)"""
         try:
             from apps.users.models import TravelerType
-            
+
             # Analizar patrones para determinar traveler type
-            service_patterns = self._analyze_travel_patterns(servicios, preferences, experiencias)
-            
+            # Volvemos a pasar solo 'servicios' y 'experiencias'
+            service_patterns = self._analyze_travel_patterns(servicios, experiencias)
+
             # Buscar traveler type que coincida con los patrones
             traveler_type = self._find_matching_traveler_type(service_patterns, traveler_type_used)
-            
+
             if traveler_type and traveler_type != user.traveler_type_id:
                 user.traveler_type_id = traveler_type
                 user.save()
-                
+
                 logger.info(f"✅ Traveler type actualizado: {traveler_type.name}")
-                
+
         except Exception as e:
             logger.error(f"❌ Error actualizando traveler type: {str(e)}")
-    
-    def _analyze_travel_patterns(self, servicios, preferences, experiencias):
-        """Analiza patrones de viaje desde servicios, preferencias y EXPERIENCIAS"""
+
+    def _analyze_travel_patterns(self, servicios, experiencias):
+        """Analiza patrones de viaje desde servicios y EXPERIENCIAS"""
         patterns = {
-            'adventure_score': 0,
-            'cultural_score': 0,
-            'luxury_score': 0,
-            'budget_score': 0,
-            'relax_score': 0,
-            'gastronomy_score': 0,
-            'nature_score': 0,    
-            'family_score': 0,    
-            'romantic_score': 0   
+            'adventure_score': 0, 'cultural_score': 0, 'luxury_score': 0,
+            'budget_score': 0, 'relax_score': 0, 'gastronomy_score': 0,
+            'nature_score': 0, 'family_score': 0, 'romantic_score': 0
         }
-        
-        # Puntajes basados en tipos de servicio
+
+        # Volver a la versión sin 'lugares'
         type_scores = {
-            'actividades': {'adventure_score': 2, 'cultural_score': 1, 'nature_score': 1},
+            'actividades': {'adventure_score': 2, 'cultural_score': 2, 'nature_score': 1, 'relax_score': 1}, # Combinado
+            # 'lugares': {'cultural_score': 2, 'nature_score': 1, 'relax_score': 1}, -> Eliminado
             'eventos': {'cultural_score': 2},
             'hospedaje': {'luxury_score': 1, 'relax_score': 1},
             'comida': {'cultural_score': 1, 'gastronomy_score': 2},
             'transporte': {'adventure_score': 1}
         }
-        
-        # Puntajes basados en EXPERIENCIAS
+
         experiencia_scores = {
             'Aventura': {'adventure_score': 3, 'nature_score': 2},
             'Cultura': {'cultural_score': 3},
@@ -639,44 +692,29 @@ class SaveItineraryView(APIView):
             'Familiar': {'family_score': 3},
             'Romántico': {'romantic_score': 3, 'luxury_score': 2, 'relax_score': 1}
         }
-        
+
         # 1. Puntajes de servicios
-        for service_type, services in servicios.items():
-            if service_type in type_scores:
+        for service_type, service_list in servicios.items(): # Renombrado
+            if service_type in type_scores and service_list: # Chequear lista
                 for pattern, score in type_scores[service_type].items():
-                    patterns[pattern] += score * len(services)
-        
-        # 2. Puntajes de EXPERIENCIAS (muy importantes)
+                    patterns[pattern] += score * len(service_list)
+
+        # 2. Puntajes de EXPERIENCIAS
         for experiencia in experiencias:
             if experiencia in experiencia_scores:
                 for pattern, score in experiencia_scores[experiencia].items():
-                    patterns[pattern] += score * 2  # Las experiencias tienen doble peso
-        
-        # 3. Ajustar por preferencias explícitas
-        preference_scores = {
-            'adventure': {'adventure_score': 3},
-            'cultural': {'cultural_score': 3},
-            'gastronomy': {'gastronomy_score': 3},
-            'luxury': {'luxury_score': 3},
-            'budget': {'budget_score': 3},
-            'relax': {'relax_score': 3}
-        }
-        
-        for pref_key, score_patterns in preference_scores.items():
-            if preferences.get(pref_key, False):
-                for pattern, score in score_patterns.items():
-                    patterns[pattern] += score
-            
+                    patterns[pattern] += score * 2
+
         return patterns
-    
+
     def _find_matching_traveler_type(self, patterns, traveler_type_used):
         """Encuentra el traveler type que mejor coincide con los patrones"""
         from apps.users.models import TravelerType
-        
+
         traveler_types = TravelerType.objects.filter(is_active=True)
         best_match = None
         best_score = 0
-        
+
         # PRIMERO: Si tenemos un traveler_type_used, darle prioridad
         if traveler_type_used:
             try:
@@ -687,23 +725,23 @@ class SaveItineraryView(APIView):
                     return used_type
             except TravelerType.DoesNotExist:
                 pass
-        
+
         # Si no hay tipo usado o no coincide, buscar el mejor match
         for tt in traveler_types:
             score = self._calculate_traveler_type_match(tt, patterns)
             if score > best_score:
                 best_score = score
                 best_match = tt
-        
+
         return best_match if best_score > 0.5 else None
-    
+
     def _calculate_traveler_type_match(self, traveler_type, patterns):
         """Calcula qué tan bien coincide un traveler type con los patrones"""
         name_lower = traveler_type.name.lower()
         description_lower = (traveler_type.description or "").lower()
-        
+
         score = 0
-        
+
         # Mapeo de patrones a términos de búsqueda
         pattern_terms = {
             'adventure_score': ['aventur', 'extrem', 'deporte', 'activo'],
@@ -716,28 +754,34 @@ class SaveItineraryView(APIView):
             'family_score': ['familiar', 'familia', 'niños', 'infantil'],
             'romantic_score': ['romántic', 'pareja', 'luna de miel', 'intimidad']
         }
-        
+
         # Calcular score basado en patrones
+        total_pattern_score = sum(patterns.values()) # Normalizar score
+        if total_pattern_score == 0: return 0.0
+
         for pattern, terms in pattern_terms.items():
             pattern_value = patterns.get(pattern, 0)
             if pattern_value > 0:
                 for term in terms:
                     if term in name_lower or term in description_lower:
-                        score += pattern_value * 0.1  # Normalizar el score
-        
-        return min(score, 1.0)  # Máximo 1.0
-    
+                        # Ponderar más si el término está en el nombre
+                        weight = 1.5 if term in name_lower else 1.0
+                        score += (pattern_value / total_pattern_score) * weight
+
+
+        return min(score, 1.0)  # Asegurar que esté entre 0 y 1
+
     def _analyze_service_distribution(self, servicios):
         """Analiza la distribución de servicios para el perfilado"""
         try:
             distribution = {}
-            total_services = sum(len(services) for services in servicios.values())
-            
-            for service_type, services in servicios.items():
+            total_services = sum(len(service_list) for service_list in servicios.values()) # Renombrado
+
+            for service_type, service_list in servicios.items(): # Renombrado
                 if total_services > 0:
-                    percentage = (len(services) / total_services) * 100
+                    percentage = (len(service_list) / total_services) * 100
                     distribution[service_type] = {
-                        'count': len(services),
+                        'count': len(service_list),
                         'percentage': round(percentage, 2)
                     }
                 else:
@@ -745,16 +789,20 @@ class SaveItineraryView(APIView):
                         'count': 0,
                         'percentage': 0.0
                     }
-            
+
             return distribution
         except Exception as e:
             logger.error(f"Error analizando distribución de servicios: {str(e)}")
             return {}
-    
+
     def _create_itinerary_items(self, itinerary, itinerario_data):
-        """Crea los items del itinerario usando tus modelos reales"""
+        """
+        Crea los items del itinerario usando tus modelos reales.
+        NOTA: Necesita revisión para manejar tipos mixtos en 'actividades'.
+        """
         items_creados = []
-        
+
+        # Volver al mapeo sin 'lugares'
         service_type_mapping = {
             'hospedaje': {
                 'content_type_model': 'accommodationservice',
@@ -763,10 +811,10 @@ class SaveItineraryView(APIView):
             },
             'comida': {
                 'content_type_model': 'place',
-                'model_class': Place, 
+                'model_class': Place,
                 'id_field': 'place_id'
             },
-            'actividades': {
+            'actividades': { # Solo apunta a ActivityService por ahora
                 'content_type_model': 'activityservice',
                 'model_class': ActivityService,
                 'id_field': 'service_id'
@@ -777,33 +825,38 @@ class SaveItineraryView(APIView):
                 'id_field': 'event_id'
             }
         }
-        
+
         servicios = itinerario_data.get('servicios', {})
-        
+
         for servicio_tipo, items_servicio in servicios.items():
             service_config = service_type_mapping.get(servicio_tipo)
             if not service_config:
-                logger.warning(f"⚠️ Tipo de servicio no mapeado: {servicio_tipo}")
+                logger.warning(f"⚠️ Tipo de servicio no mapeado al guardar: {servicio_tipo}")
                 continue
-            
+
             try:
-                content_type = ContentType.objects.get(model=service_config['content_type_model'])
+                content_type = ContentType.objects.get(app_label=service_config['model_class']._meta.app_label, model=service_config['content_type_model'])
             except ContentType.DoesNotExist:
-                logger.error(f"❌ ContentType no encontrado: {service_config['content_type_model']}")
+                logger.error(f"❌ ContentType no encontrado al guardar: {service_config['content_type_model']}")
                 continue
-            
+            except Exception as e:
+                 logger.error(f"❌ Error obteniendo ContentType para {service_config['content_type_model']}: {e}")
+                 continue
+
+
             for idx, item_data in enumerate(items_servicio):
                 try:
-                    # Buscar el objeto real en la base de datos
+                    # Esta función asume que todos los items bajo 'actividades' son ActivityService
+                    # Necesitaría modificarse para determinar si es Place o ActivityService
                     object_id = self._find_service_object_id(item_data, service_config)
-                    
+
                     if not object_id:
-                        logger.warning(f"⚠️ No se pudo encontrar object_id para item: {item_data.get('nombre', 'Sin nombre')}")
+                        logger.warning(f"⚠️ No se pudo encontrar object_id para item al guardar: {item_data.get('nombre', 'Sin nombre')}")
                         continue
-                    
+
                     # Preparar fecha programada
                     scheduled_date = self._parse_date(item_data.get('fecha'))
-                    
+
                     # Crear el itinerary item
                     item = ItineraryItem.objects.create(
                         itinerary_id=itinerary,
@@ -811,79 +864,107 @@ class SaveItineraryView(APIView):
                         object_id=object_id,
                         scheduled_date=scheduled_date,
                         estimated_cost=item_data.get('costo', 0),
-                        estimated_cost_currency='USD'
+                        estimated_cost_currency='CLP' # Asumir CLP o obtener de config
                     )
-                    
+
                     items_creados.append(item)
-                    logger.info(f"✅ Item guardado: {item_data.get('nombre', 'Sin nombre')} - ObjectID: {object_id}")
-                    
+                    # logger.info(f"✅ Item guardado: {item_data.get('nombre', 'Sin nombre')} - ObjectID: {object_id}")
+
                 except Exception as e:
                     logger.error(f"❌ Error guardando item {idx} de {servicio_tipo}: {str(e)}")
                     continue
-        
+
         logger.info(f"🎉 Total de items guardados: {len(items_creados)}")
         return items_creados
-    
 
-    
+
+
     def _find_service_object_id(self, item_data, service_config):
         """
         Busca o determina el object_id para el servicio.
-        IMPORTANTE: El mismo servicio puede estar en múltiples itinerarios.
+        NOTA: Esta función asume que el tipo de modelo es fijo por service_config.
+              Necesita modificarse si 'actividades' puede contener Place y ActivityService.
         """
         model_class = service_config['model_class']
         id_field = service_config['id_field']
-        
+
         try:
-            # DEBUG: Ver qué datos tenemos
-            logger.info(f"🔍 Buscando object_id para: {item_data.get('nombre', 'Sin nombre')}")
-            logger.info(f"   ID en datos: {item_data.get('id', 'No disponible')}")
-            
+            # logger.debug(f"🔍 Buscando object_id para: {item_data.get('nombre', 'Sin nombre')} usando {model_class.__name__}")
+            # logger.debug(f"   ID en datos: {item_data.get('id', 'No disponible')}")
+
             # OPCIÓN 1: Usar el ID proporcionado en los datos (si es UUID válido)
-            if 'id' in item_data and item_data['id']:
+            item_id_str = item_data.get('id')
+            if item_id_str:
                 try:
-                    service_uuid = uuid.UUID(str(item_data['id']))
+                    service_uuid = uuid.UUID(str(item_id_str))
                     # VERIFICAR que el servicio existe en la base de datos
+                    # Usar **kwargs para construir el filtro dinámicamente
                     if model_class.objects.filter(**{id_field: service_uuid}).exists():
-                        logger.info(f"   ✅ Usando UUID existente: {service_uuid}")
+                        # logger.debug(f"   ✅ Usando UUID existente: {service_uuid}")
                         return service_uuid
                     else:
-                        logger.warning(f"   ⚠️ UUID no existe en BD, pero lo usaremos: {service_uuid}")
+                        logger.warning(f"   ⚠️ UUID {service_uuid} no existe en {model_class.__name__}, pero se usará.")
+                        # Considerar si realmente quieres guardar un item que apunta a un objeto inexistente
                         return service_uuid
-                except (ValueError, AttributeError) as e:
-                    logger.warning(f"   ❌ UUID inválido: {e}")
-            
+                except (ValueError, AttributeError, TypeError) as e: # Añadir TypeError
+                    logger.warning(f"   ❌ ID '{item_id_str}' no es un UUID válido: {e}")
+                    # ¿Qué hacer si el ID no es UUID? Podría ser un ID antiguo, o error.
+                    # Por ahora, continuamos para ver si hay otras formas de encontrarlo, o fallamos.
+                    pass # Continuar a otras opciones si las hubiera
+
+            # Por ahora, si no hay ID válido, no podemos encontrarlo.
+            logger.warning(f"   ❌ No se pudo determinar un object_id válido para '{item_data.get('nombre')}'")
+            return None
+
+
         except Exception as e:
-            logger.error(f"❌ Error en _find_service_object_id: {str(e)}")
-            # Fallback: generar UUID
-            return uuid.uuid4()
-    
+            logger.error(f"❌ Error inesperado en _find_service_object_id: {str(e)}")
+            return None
+
     def _parse_date(self, date_string):
         """Convierte string de fecha a datetime object"""
         if not date_string:
-            return datetime.now()
-        
+            # logger.warning("Fecha vacía recibida, usando timezone.now()")
+            return timezone.now() # Usar timezone.now() para que sea aware
+
         try:
-            if 'T' in date_string:
-                return datetime.fromisoformat(date_string.replace('Z', '+00:00'))
-            else:
-                return datetime.strptime(date_string, '%Y-%m-%d %H:%M:%S')
-        except (ValueError, TypeError):
-            return datetime.now()
+            # Intentar formato ISO con zona horaria Z o +HH:MM
+            dt = datetime.fromisoformat(date_string.replace('Z', '+00:00'))
+            # Asegurar que sea aware
+            if not timezone.is_aware(dt):
+                 # Asumir UTC si no tiene offset
+                 dt = timezone.make_aware(dt, timezone.utc)
+            return dt
+        except ValueError:
+             # Intentar otros formatos comunes si falla ISO
+             for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+                  try:
+                       dt = datetime.strptime(date_string, fmt)
+                       # Hacerlo aware usando la zona por defecto de Django
+                       return timezone.make_aware(dt, timezone.get_current_timezone())
+                  except ValueError:
+                       pass
+        except Exception as e: # Capturar otros errores inesperados
+             logger.error(f"Error inesperado parseando fecha '{date_string}': {e}")
+
+
+        logger.warning(f"Formato de fecha no reconocido: '{date_string}'. Usando timezone.now().")
+        return timezone.now() # Fallback final
+
 
 class UserItinerariesView(generics.ListAPIView):
     """Obtiene todos los itinerarios del usuario autenticado"""
     serializer_class = ItineraryWithItemsSerializer
-    
+
     def get_queryset(self):
         user = self.request.user
         if not user.is_authenticated:
             return Itinerary.objects.none()
-        
+
         collaborator_itineraries = ItineraryCollaborator.objects.filter(
             user_id=user
         ).values_list('itinerary_id', flat=True)
-        
+
         # OPTIMIZACIÓN: Usar Prefetch con select_related para coordenadas
         return Itinerary.objects.filter(
             itinerary_id__in=collaborator_itineraries
@@ -897,16 +978,16 @@ class UserItinerariesView(generics.ListAPIView):
 class ItineraryDetailView(generics.RetrieveAPIView):
     """Obtiene el detalle de un itinerario específico"""
     serializer_class = ItineraryWithItemsSerializer
-    
+
     def get_queryset(self):
         user = self.request.user
         if not user.is_authenticated:
             return Itinerary.objects.none()
-        
+
         collaborator_itineraries = ItineraryCollaborator.objects.filter(
             user_id=user
         ).values_list('itinerary_id', flat=True)
-        
+
         # OPTIMIZACIÓN MEJORADA para el detalle
         return Itinerary.objects.filter(
             itinerary_id__in=collaborator_itineraries
@@ -916,7 +997,7 @@ class ItineraryDetailView(generics.RetrieveAPIView):
                 queryset=ItineraryItem.objects.select_related('content_type')
             )
         )
-    
+
     lookup_field = 'itinerary_id'
 
 # agregar temporalmente
@@ -924,41 +1005,57 @@ class DebugItineraryView(APIView):
     def get(self, request, itinerary_id):
         """Vista temporal para debuggear un itinerario específico"""
         try:
-            itinerary = Itinerary.objects.get(itinerary_id=itinerary_id)
-            
-            # Obtener items manualmente
-            items = ItineraryItem.objects.filter(itinerary_id=itinerary)
-            
+            # Usar prefetch_related para eficiencia al acceder a 'reservable'
+            itinerary = Itinerary.objects.prefetch_related(
+                 Prefetch(
+                      'itineraryitem_set',
+                      queryset=ItineraryItem.objects.select_related('content_type').prefetch_related('target') # Prefetch GenericForeignKey
+                 )
+            ).get(itinerary_id=itinerary_id)
+
+
             debug_data = {
                 'itinerary': {
                     'id': str(itinerary.itinerary_id),
                     'name': itinerary.name,
-                    'items_count': items.count()
+                    'items_count': itinerary.itineraryitem_set.count() # Usar el prefetch count
                 },
                 'items': []
             }
-            
-            for item in items:
+
+            for item in itinerary.itineraryitem_set.all(): # Iterar sobre el prefetch
                 item_data = {
                     'item_id': str(item.item_id),
                     'content_type': item.content_type.model,
                     'object_id': str(item.object_id),
-                    'scheduled_date': item.scheduled_date.isoformat(),
+                    'scheduled_date': item.scheduled_date.isoformat() if item.scheduled_date else None,
                     'estimated_cost': float(item.estimated_cost)
                 }
-                
-                # Intentar obtener el objeto relacionado
+
+                # Intentar obtener el objeto relacionado usando el 'target' prefetchado
                 try:
-                    if item.reservable:
-                        item_data['service_name'] = getattr(item.reservable, 'name', 'No name')
+                    target_object = item.target # Acceder al objeto relacionado directamente
+                    if target_object:
+                        item_data['service_name'] = getattr(target_object, 'name', f'Objeto sin nombre ({type(target_object).__name__})')
+                        # Añadir más detalles si es necesario
+                        if isinstance(target_object, Place):
+                             item_data['place_type'] = target_object.type
+                        elif isinstance(target_object, ActivityService):
+                             item_data['activity_duration'] = target_object.duration_minutes
+
                     else:
-                        item_data['service_name'] = 'Reservable is None'
+                        # Esto podría pasar si el objeto fue borrado
+                        item_data['service_name'] = f'Objeto relacionado (ID: {item.object_id}) no encontrado o es None'
                 except Exception as e:
-                    item_data['service_name'] = f'Error: {str(e)}'
-                
+                    # Capturar cualquier error al acceder al objeto relacionado
+                    item_data['service_name'] = f'Error al acceder al objeto relacionado: {str(e)}'
+
                 debug_data['items'].append(item_data)
-            
+
             return Response(debug_data)
-            
+
         except Itinerary.DoesNotExist:
             return Response({'error': 'Itinerario no encontrado'}, status=404)
+        except Exception as e:
+             logger.error(f"Error en DebugItineraryView: {e}", exc_info=True)
+             return Response({'error': f"Error interno: {e}"}, status=500)

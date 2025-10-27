@@ -1,3 +1,5 @@
+# apps/recommendation/services.py
+
 import numpy as np
 from django.core.cache import cache
 from apps.users.models import CustomUser, UserInterest
@@ -31,8 +33,8 @@ def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
     
     # Optimización: select_related para evitar N+1 queries
     interests = UserInterest.objects.filter(user_id=user.id)\
-                  .select_related("interest_id")\
-                  .only('interest_id__name', 'weight')
+                .select_related("interest_id")\
+                .only('interest_id__name', 'weight')
     
     if not interests:
         return None
@@ -170,19 +172,24 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
             queryset = queryset.filter(zone_id=zone)
             
     elif service_type == 'place':
+        # Lista expandida de PlaceType que pueden considerarse "actividades"
         interesting_categories = [
-            PlaceType.ATTRACTION, PlaceType.VIEWPOINT, PlaceType.BEACH, PlaceType.PARK,
-            PlaceType.MUSEUM, PlaceType.GALLERY, PlaceType.ART_GALLERY, PlaceType.HISTORIC_SITE,
-            PlaceType.MONUMENT, PlaceType.CASTLE, PlaceType.THEATRE, PlaceType.CINEMA,
-            PlaceType.CONCERT_HALL, PlaceType.SPORTS_CENTRE, PlaceType.STADIUM,
-            PlaceType.NIGHTCLUB, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
-            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.BOTANICAL_GARDEN,
-            PlaceType.HOT_SPRING, PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK,
-            PlaceType.BOOKS, PlaceType.LIBRARY,
+            PlaceType.PARK, PlaceType.MUSEUM, PlaceType.BEACH, PlaceType.VIEWPOINT,
+            PlaceType.LIBRARY, PlaceType.CINEMA, PlaceType.THEATRE, PlaceType.STADIUM,
+            PlaceType.SPORTS_CENTRE, PlaceType.MARKETPLACE, PlaceType.SHOP, PlaceType.MALL,
+            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.NIGHTCLUB, PlaceType.ATTRACTION,
+            PlaceType.ARTWORK, PlaceType.GALLERY, PlaceType.THEME_PARK, PlaceType.GARDEN,
+            PlaceType.SWIMMING_POOL, PlaceType.GOLF_COURSE, PlaceType.FITNESS_CENTRE,
+            PlaceType.PLAYGROUND, PlaceType.MONUMENT, PlaceType.MEMORIAL, PlaceType.CASTLE,
+            PlaceType.RUINS, PlaceType.ARCHAEOLOGICAL_SITE, PlaceType.BOOKS,
+            PlaceType.CONCERT_HALL, PlaceType.BOTANICAL_GARDEN, PlaceType.HOT_SPRING,
+            PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK, PlaceType.ART_GALLERY,
+            PlaceType.HISTORIC_SITE, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
         ]
+        
         interesting_types = [pt.value for pt in interesting_categories]
         
-        base_fields = ['place_id', 'embedding', 'rating']
+        base_fields = ['place_id', 'embedding', 'rating', 'average_price'] # Añadido average_price
         queryset = Place.objects.exclude(embedding=None)\
             .filter(type__in=interesting_types)\
             .only(*base_fields, 'zone_id', 'name', 'type')
@@ -220,7 +227,7 @@ def cosine_similarity_numpy(vec1, vec2):
     return dot_product / (norm1 * norm2)
 
 def recommend_places(user: CustomUser, service_type: str, zone: Zone = None, 
-                    top_k: int = 20, use_cache: bool = True, diversity_ratio: float = 0.3):
+                     top_k: int = 20, use_cache: bool = True, diversity_ratio: float = 0.3):
     """
     Recomienda servicios con diversificación para evitar sobre-especialización.
     """
@@ -470,20 +477,45 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
             services = services.filter(place_id__zone_id=zone)
         
         result = list(services.order_by('-rating')[:top_k])
-        
-    elif service_type in ['place', 'restaurant']:
+         
+    elif service_type == 'restaurant':
         interesting_types = [
-            'restaurant', 'cafe', 'attraction', 'viewpoint', 'beach', 'park', 
-            'museum', 'gallery', 'cinema', 'theatre'
+            PlaceType.RESTAURANT, PlaceType.CAFE, PlaceType.BAR, PlaceType.PUB,
         ]
+        interesting_types_values = [pt.value for pt in interesting_types]
+        
+        services = Place.objects.filter(type__in=interesting_types_values)\
+            .only('place_id', 'rating', 'name', 'type', 'zone_id')
+        
+        if zone:
+            services = services.filter(zone_id=zone)
+            
+        result = list(services.order_by('-rating')[:top_k])
+
+    elif service_type == 'place':
+        interesting_categories = [
+            PlaceType.PARK, PlaceType.MUSEUM, PlaceType.BEACH, PlaceType.VIEWPOINT,
+            PlaceType.LIBRARY, PlaceType.CINEMA, PlaceType.THEATRE, PlaceType.STADIUM,
+            PlaceType.SPORTS_CENTRE, PlaceType.MARKETPLACE, PlaceType.SHOP, PlaceType.MALL,
+            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.NIGHTCLUB, PlaceType.ATTRACTION,
+            PlaceType.ARTWORK, PlaceType.GALLERY, PlaceType.THEME_PARK, PlaceType.GARDEN,
+            PlaceType.SWIMMING_POOL, PlaceType.GOLF_COURSE, PlaceType.FITNESS_CENTRE,
+            PlaceType.PLAYGROUND, PlaceType.MONUMENT, PlaceType.MEMORIAL, PlaceType.CASTLE,
+            PlaceType.RUINS, PlaceType.ARCHAEOLOGICAL_SITE, PlaceType.BOOKS,
+            PlaceType.CONCERT_HALL, PlaceType.BOTANICAL_GARDEN, PlaceType.HOT_SPRING,
+            PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK, PlaceType.ART_GALLERY,
+            PlaceType.HISTORIC_SITE, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
+        ]
+        interesting_types = [pt.value for pt in interesting_categories]
         
         services = Place.objects.filter(type__in=interesting_types)\
-            .only('place_id', 'rating', 'name', 'type', 'zone_id')
+            .only('place_id', 'rating', 'name', 'type', 'zone_id', 'average_price')
         
         if zone:
             services = services.filter(zone_id=zone)
         
         result = list(services.order_by('-rating')[:top_k])
+    
     else:
         result = []
     
