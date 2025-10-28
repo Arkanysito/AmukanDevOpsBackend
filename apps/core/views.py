@@ -1,3 +1,4 @@
+import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from .constants import Gender, Nationality, Language, ActivityType, AccommodationType, PlaceType, Currency
@@ -31,7 +32,7 @@ DASHBOARD_ID = 2  # tu dashboard en Metabase
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, JWTAuthentication])
+@authentication_classes([JWTAuthentication, SessionAuthentication])
 @permission_classes([IsAuthenticated])
 @never_cache
 def get_org_dashboard_embed_url(request):
@@ -45,7 +46,6 @@ def get_org_dashboard_embed_url(request):
     signed_url = build_signed_embed_url_for_dashboard(
         dashboard_id=DASHBOARD_ID,
         locked_parameters={ },
-        
     )
 
     if request.GET.get("debug") == "1":
