@@ -328,7 +328,8 @@ class ItineraryPreviewView(APIView):
                 "costo": float(item_cost), # Usar item_cost
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
-                "tipo_comida": item.get('meal_type')
+                "tipo_comida": item.get('meal_type'),
+                "backend_type": item.get('type')
             }
         else:
             # Servicio de la base de datos
@@ -356,7 +357,8 @@ class ItineraryPreviewView(APIView):
                 "costo": float(item_cost), # Usar item_cost
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
-                "tipo_comida": item.get('meal_type')
+                "tipo_comida": item.get('meal_type'),
+                "backend_type": item.get('type')
             }
 
         # Para eventos, agregar información específica
@@ -798,63 +800,92 @@ class SaveItineraryView(APIView):
     def _create_itinerary_items(self, itinerary, itinerario_data):
         """
         Crea los items del itinerario usando tus modelos reales.
-        NOTA: Necesita revisión para manejar tipos mixtos en 'actividades'.
+        Esta versión maneja tipos mixtos (Place, ActivityService)
+        leyendo la clave 'backend_type' de cada item.
         """
         items_creados = []
-
-        # Volver al mapeo sin 'lugares'
-        service_type_mapping = {
-            'hospedaje': {
+        
+        # Mapeo maestro que traduce el 'backend_type' (del item) al modelo/ContentType correcto.
+        # Asegúrate que los 'app_label' (ej. 'experiences', 'location') sean correctos
+        backend_type_to_model_config = {
+            'accommodation': {
                 'content_type_model': 'accommodationservice',
                 'model_class': AccommodationService,
-                'id_field': 'service_id'
+                'id_field': 'service_id',
+                'app_label': 'experiences'
             },
-            'comida': {
+            'dining': {
                 'content_type_model': 'place',
                 'model_class': Place,
-                'id_field': 'place_id'
+                'id_field': 'place_id',
+                'app_label': 'location'
             },
-            'actividades': { # Solo apunta a ActivityService por ahora
+            'activity': { # Este es ActivityService
                 'content_type_model': 'activityservice',
                 'model_class': ActivityService,
-                'id_field': 'service_id'
+                'id_field': 'service_id',
+                'app_label': 'experiences' 
             },
-            'eventos': {
+            'place_activity': { # Este es Place
+                'content_type_model': 'place',
+                'model_class': Place,
+                'id_field': 'place_id',
+                'app_label': 'location'
+            },
+            'event': {
                 'content_type_model': 'event',
                 'model_class': Event,
-                'id_field': 'event_id'
+                'id_field': 'event_id',
+                'app_label': 'experiences'
             }
         }
 
         servicios = itinerario_data.get('servicios', {})
 
+        # Iteramos sobre las categorías del frontend (ej. 'actividades', 'hospedaje')
         for servicio_tipo, items_servicio in servicios.items():
-            service_config = service_type_mapping.get(servicio_tipo)
-            if not service_config:
-                logger.warning(f"⚠️ Tipo de servicio no mapeado al guardar: {servicio_tipo}")
+            
+            if not items_servicio:
                 continue
 
-            try:
-                content_type = ContentType.objects.get(app_label=service_config['model_class']._meta.app_label, model=service_config['content_type_model'])
-            except ContentType.DoesNotExist:
-                logger.error(f"❌ ContentType no encontrado al guardar: {service_config['content_type_model']}")
-                continue
-            except Exception as e:
-                 logger.error(f"❌ Error obteniendo ContentType para {service_config['content_type_model']}: {e}")
-                 continue
-
-
+            # Iteramos sobre cada item individual dentro de la categoría
             for idx, item_data in enumerate(items_servicio):
                 try:
-                    # Esta función asume que todos los items bajo 'actividades' son ActivityService
-                    # Necesitaría modificarse para determinar si es Place o ActivityService
+                    # 1. LEER EL TIPO DE BACKEND DESDE EL ITEM
+                    backend_type = item_data.get('backend_type')
+                    
+                    if not backend_type:
+                        logger.warning(f"⚠️ Item {item_data.get('nombre')} no tiene 'backend_type'. Saltando.")
+                        continue
+
+                    # 2. OBTENER LA CONFIGURACIÓN DEL MODELO BASADO EN EL 'backend_type'
+                    service_config = backend_type_to_model_config.get(backend_type)
+
+                    if not service_config:
+                        logger.warning(f"⚠️ Tipo de backend no mapeado al guardar: {backend_type} (para item {item_data.get('nombre')})")
+                        continue
+                    
+                    # 3. OBTENER EL CONTENTTYPE CORRECTO
+                    try:
+                        content_type = ContentType.objects.get(
+                            app_label=service_config['app_label'], 
+                            model=service_config['content_type_model']
+                        )
+                    except ContentType.DoesNotExist:
+                        logger.error(f"❌ ContentType no encontrado al guardar: app='{service_config['app_label']}', model='{service_config['content_type_model']}'")
+                        continue
+                    except Exception as e:
+                         logger.error(f"❌ Error obteniendo ContentType para {service_config['content_type_model']}: {e}")
+                         continue
+
+                    # 4. ENCONTRAR EL OBJECT_ID (tu función _find_service_object_id ya usa service_config)
                     object_id = self._find_service_object_id(item_data, service_config)
 
                     if not object_id:
-                        logger.warning(f"⚠️ No se pudo encontrar object_id para item al guardar: {item_data.get('nombre', 'Sin nombre')}")
+                        logger.warning(f"⚠️ No se pudo encontrar object_id para item al guardar: {item_data.get('nombre', 'Sin nombre')} (Modelo: {service_config['model_class'].__name__})")
                         continue
 
-                    # Preparar fecha programada
+                    # 5. PREPARAR FECHA Y CREAR ITEM
                     scheduled_date = self._parse_date(item_data.get('fecha'))
 
                     # Crear el itinerary item
@@ -864,14 +895,13 @@ class SaveItineraryView(APIView):
                         object_id=object_id,
                         scheduled_date=scheduled_date,
                         estimated_cost=item_data.get('costo', 0),
-                        estimated_cost_currency='CLP' # Asumir CLP o obtener de config
+                        estimated_cost_currency='CLP' 
                     )
 
                     items_creados.append(item)
-                    # logger.info(f"✅ Item guardado: {item_data.get('nombre', 'Sin nombre')} - ObjectID: {object_id}")
 
                 except Exception as e:
-                    logger.error(f"❌ Error guardando item {idx} de {servicio_tipo}: {str(e)}")
+                    logger.error(f"❌ Error guardando item {idx} de {servicio_tipo} (Nombre: {item_data.get('nombre')}): {str(e)}")
                     continue
 
         logger.info(f"🎉 Total de items guardados: {len(items_creados)}")
@@ -966,12 +996,18 @@ class UserItinerariesView(generics.ListAPIView):
         ).values_list('itinerary_id', flat=True)
 
         # OPTIMIZACIÓN: Usar Prefetch con select_related para coordenadas
+        # NOTA: La pre-carga del GenericForeignKey ('reservable')
+        # es compleja y generalmente se hace en el Serializer
+        # o pre-cargando cada modelo por separado.
+        # Dejamos la optimización simple aquí.
         return Itinerary.objects.filter(
             itinerary_id__in=collaborator_itineraries
         ).prefetch_related(
             Prefetch(
                 'itineraryitem_set',
                 queryset=ItineraryItem.objects.select_related('content_type')
+                # Si 'ItineraryWithItemsSerializer' pre-carga 'reservable',
+                # podría causar errores.
             )
         ).order_by('-created_at')
 
@@ -995,12 +1031,13 @@ class ItineraryDetailView(generics.RetrieveAPIView):
             Prefetch(
                 'itineraryitem_set',
                 queryset=ItineraryItem.objects.select_related('content_type')
+                # Aquí también, el prefetch del GFK se maneja mejor en otro lugar
+                # o con 'prefetch_related_objects'
             )
         )
 
     lookup_field = 'itinerary_id'
 
-# agregar temporalmente
 class DebugItineraryView(APIView):
     def get(self, request, itinerary_id):
         """Vista temporal para debuggear un itinerario específico"""
@@ -1009,7 +1046,7 @@ class DebugItineraryView(APIView):
             itinerary = Itinerary.objects.prefetch_related(
                  Prefetch(
                       'itineraryitem_set',
-                      queryset=ItineraryItem.objects.select_related('content_type').prefetch_related('target') # Prefetch GenericForeignKey
+                      queryset=ItineraryItem.objects.select_related('content_type').prefetch_related('reservable') 
                  )
             ).get(itinerary_id=itinerary_id)
 
@@ -1032,9 +1069,9 @@ class DebugItineraryView(APIView):
                     'estimated_cost': float(item.estimated_cost)
                 }
 
-                # Intentar obtener el objeto relacionado usando el 'target' prefetchado
+                # Intentar obtener el objeto relacionado usando el 'reservable' prefetchado
                 try:
-                    target_object = item.target # Acceder al objeto relacionado directamente
+                    target_object = item.reservable 
                     if target_object:
                         item_data['service_name'] = getattr(target_object, 'name', f'Objeto sin nombre ({type(target_object).__name__})')
                         # Añadir más detalles si es necesario
