@@ -16,3 +16,4 @@ numpy==1.26.4
 selenium==4.19.0
 webdriver-manager==4.0.1
 celery==5.5.3
+boto3>=1.35.0
