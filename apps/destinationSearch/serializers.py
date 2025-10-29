@@ -9,6 +9,7 @@ class AccommodationServiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = AccommodationService
         fields = [
+            'service_id',
             'name',
             'organization_name',
             'description',
@@ -36,6 +37,7 @@ class PlaceAccommodationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Place
         fields = [
+            'place_id',
             'name',
             'organization_name',
             'description',
@@ -56,6 +58,7 @@ class ActivityServiceSerializer(serializers.ModelSerializer):
     class Meta:
         model = ActivityService
         fields = [
+            'service_id',
             'name',
             'organization_name',
             'description',
@@ -69,6 +72,7 @@ class EventSerializer(serializers.ModelSerializer):
     class Meta:
         model = Event
         fields = [
+            'event_id',
             'name', 
             'organization_name', 
             'description', 
@@ -84,6 +88,7 @@ class PlaceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Place
         fields = [
+            'place_id',
             'name',
             'organization_name',
             'coordinates',

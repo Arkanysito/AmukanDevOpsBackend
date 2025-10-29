@@ -3,6 +3,13 @@ from django.views.decorators.cache import never_cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, authentication_classes, permission_classes, parser_classes
+from .constants import Gender, Nationality, Language, ActivityType, AccommodationType, PlaceType, Currency
+from django.http import JsonResponse, HttpResponseForbidden
+from apps.core.metabase_embed import build_signed_embed_url_for_dashboard
+from django.views.decorators.cache import never_cache
+from django.utils.cache import add_never_cache_headers
+from apps.organizations.models import OrganizationUser
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
@@ -24,6 +31,10 @@ class ChoicesView(APIView):
             "gender": [{"value": choice.value, "label": choice.label} for choice in Gender],
             "nationality": [{"value": choice.value, "label": choice.label} for choice in Nationality],
             "language": [{"value": choice.value, "label": choice.label} for choice in Language],
+            "activityType": [{"value": choice.value, "label": choice.label} for choice in ActivityType],
+            "accommodationType": [{"value": choice.value, "label": choice.label} for choice in AccommodationType],
+            "placeType": [{"value": choice.value, "label": choice.label} for choice in PlaceType],
+            "currency": [{"value": choice.value, "label": choice.label} for choice in Currency],
         })
 
 DASHBOARD_ID = 2  # tu dashboard en Metabase

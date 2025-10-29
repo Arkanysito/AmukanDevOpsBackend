@@ -13,6 +13,7 @@ from apps.location.models import Place
 from apps.experiences.models import (
     AccommodationService,
     ActivityService,
+    Event,
 )
 
 # Campos base comunes a todos los servicios
@@ -397,3 +398,255 @@ def delete_service(request, service_type: str, service_id: str):
             {"detail": f"Error al eliminar servicio: {str(e)}"},
             status=status.HTTP_400_BAD_REQUEST,
         )
+    
+EVENT_BASE_FIELDS = {
+    "name", "description", "price", "price_currency", "details", "rating", "is_featured"
+}
+EVENT_SPECIFIC_FIELDS = {"start_date", "end_date"}
+EVENT_ALLOWED = EVENT_BASE_FIELDS | EVENT_SPECIFIC_FIELDS | {"place_id"}
+EVENT_REQUIRED = {"name", "start_date", "end_date", "price", "price_currency"}
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def list_events(request):
+    """
+    Obtener todos los eventos de la organización a la que pertenece el usuario
+    (sin filtros adicionales, siguiendo el patrón de services).
+    """
+    print("=== LIST EVENTS ===")
+    print(f"Usuario autenticado: {request.user}")
+    print(f"User ID: {request.user.id}")
+    print(f"Username: {request.user.username}")
+
+    try:
+        # Buscar la relación OrganizationUser para este usuario
+        organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
+        print(f"OrganizationUser encontrado: {organization_user_relation}")
+
+        if not organization_user_relation:
+            print("ERROR: No se encontró OrganizationUser")
+            return Response(
+                {"detail": "El usuario no pertenece a ninguna organización"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        organization = organization_user_relation.organization_id
+        print(f"Organización: {organization}")
+        print(f"Organization ID: {organization.organization_id if organization else 'None'}")
+
+        # Obtener todos los eventos de la organización (sin filtros extra)
+        events_queryset = Event.objects.filter(organization_id=organization)
+        print(f"Eventos encontrados: {events_queryset.count()}")
+
+        events_payload = []
+        for event_instance in events_queryset:
+            events_payload.append({
+                "event_id": str(event_instance.event_id),
+                "name": event_instance.name,
+                "description": event_instance.description,
+                "start_date": event_instance.start_date.isoformat() if event_instance.start_date else None,
+                "end_date": event_instance.end_date.isoformat() if event_instance.end_date else None,
+                "price": float(event_instance.price) if event_instance.price else None,
+                "price_currency": event_instance.price_currency,
+                "rating": float(event_instance.rating) if event_instance.rating is not None else None,
+                "details": event_instance.details,
+                "is_featured": bool(event_instance.is_featured),
+                "organization_id": str(event_instance.organization_id.organization_id) if event_instance.organization_id else None,
+                "place_id": str(event_instance.place_id.place_id) if event_instance.place_id else None,
+                # "created_at": event_instance.created_at.isoformat() if event_instance.created_at else None,
+            })
+
+        return Response({"events": events_payload}, status=status.HTTP_200_OK)
+
+    except Exception as error:
+        print(f"EXCEPCIÓN: {str(error)}")
+        import traceback
+        traceback.print_exc()
+        return Response({"detail": f"Error al obtener eventos: {str(error)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def get_event_detail(request, event_id: str):
+    """
+    Obtener detalles de un evento específico
+    """
+    print("=== GET EVENT DETAIL ===")
+    print(f"Event ID: {event_id}")
+    print(f"Usuario: {request.user} (id={request.user.id})")
+
+    event_instance = get_object_or_404(Event, pk=event_id)
+
+    # Verificar que el evento pertenezca a la organización del usuario
+    organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
+    if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
+        print("ERROR: Permisos insuficientes para ver el evento")
+        return Response(
+            {"detail": "No tienes permisos para ver este evento"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    response_data = {
+        "event_id": str(event_instance.event_id),
+        "name": event_instance.name,
+        "description": event_instance.description,
+        "start_date": event_instance.start_date.isoformat() if event_instance.start_date else None,
+        "end_date": event_instance.end_date.isoformat() if event_instance.end_date else None,
+        "price": float(event_instance.price) if event_instance.price is not None else None,
+        "price_currency": event_instance.price_currency,
+        "details": event_instance.details,
+        "is_featured": bool(event_instance.is_featured),
+        "rating": float(event_instance.rating) if event_instance.rating is not None else None,
+        "organization_id": str(event_instance.organization_id.organization_id) if event_instance.organization_id else None,
+        "place_id": str(event_instance.place_id.place_id) if event_instance.place_id else None,
+        # "created_at": event_instance.created_at.isoformat() if event_instance.created_at else None,
+        # "updated_at": event_instance.updated_at.isoformat() if event_instance.updated_at else None,
+    }
+    return Response(response_data, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_event(request):
+    """
+    Crear un evento para la organización del usuario.
+    Requeridos: name, start_date, end_date, price, price_currency
+    Opcionales: description, details (JSON), is_featured, rating, place_id
+    """
+    print("=== CREATE EVENT ===")
+    print(f"Usuario: {request.user} (id={request.user.id})")
+    print(f"Request Data: {request.data}")
+
+    try:
+        # Buscar la relación OrganizationUser para este usuario
+        organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
+        if not organization_user_relation:
+            return Response(
+                {"detail": "El usuario no pertenece a ninguna organización"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        organization = organization_user_relation.organization_id
+
+        # Resolver FK opcional place_id
+        place_instance = None
+        place_id_param = request.data.get("place_id")
+        if place_id_param:
+            place_instance = get_object_or_404(Place, pk=place_id_param)
+
+        # Aceptar solo campos permitidos
+        payload = {field: value for field, value in request.data.items() if field in EVENT_ALLOWED}
+
+        # Validación de requeridos
+        missing_fields = [field for field in EVENT_REQUIRED if payload.get(field) in (None, "")]
+        if missing_fields:
+            print(f"Faltan: {missing_fields}")
+            return Response(
+                {"detail": "Faltan campos requeridos", "fields": sorted(set(missing_fields))},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payload["organization_id"] = organization
+        payload["place_id"] = place_instance
+
+        with transaction.atomic():
+            event_created = Event.objects.create(**payload)
+            print(f"Evento creado: {event_created.event_id} - {event_created.name}")
+
+        return Response(
+            {"event_id": str(event_created.event_id), "name": event_created.name},
+            status=status.HTTP_201_CREATED,
+        )
+
+    except (IntegrityError, ValidationError) as creation_error:
+        return Response({"detail": str(creation_error)}, status=status.HTTP_400_BAD_REQUEST)
+    except Exception as unexpected_error:
+        return Response({"detail": f"Error al crear evento: {unexpected_error}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["PATCH", "PUT"])
+@permission_classes([IsAuthenticated])
+def update_event(request, event_id: str):
+    """
+    Actualizar un evento específico
+    """
+    print("=== UPDATE EVENT ===")
+    print(f"Event ID: {event_id}")
+    print(f"User: {request.user}")
+    print(f"Request Data: {request.data}")
+
+    event_instance = get_object_or_404(Event, pk=event_id)
+
+    # Verificar permisos (pertenencia a la misma organización)
+    organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
+    if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
+        return Response(
+            {"detail": "No tienes permisos para editar este evento"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Solo permitimos actualizar estos campos
+    fields_to_update = {field: value for field, value in request.data.items() if field in EVENT_ALLOWED}
+    print(f"Campos a actualizar: {list(fields_to_update.keys())}")
+
+    # Resolver FK place_id si viene en el body
+    if "place_id" in fields_to_update:
+        place_id_param = fields_to_update.pop("place_id")
+        if place_id_param:
+            event_instance.place_id = get_object_or_404(Place, pk=place_id_param)
+        else:
+            event_instance.place_id = None
+
+    # Asignar el resto de campos simples/específicos
+    for field_name, field_value in fields_to_update.items():
+        print(f"Setting {field_name} = {field_value} (type: {type(field_value)})")
+        setattr(event_instance, field_name, field_value)
+
+    try:
+        with transaction.atomic():
+            # Mantener coherencia con services: sin full_clean() por temas con arrays, etc.
+            event_instance.save()
+            print("Evento actualizado exitosamente")
+    except Exception as update_error:
+        print(f"Error durante la actualización: {str(update_error)}")
+        import traceback
+        traceback.print_exc()
+        return Response({"detail": str(update_error)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(
+        {
+            "event_id": str(event_instance.event_id),
+            "name": event_instance.name,
+            "updated_fields": list(fields_to_update.keys()),
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def delete_event(request, event_id: str):
+    """
+    Eliminar un evento
+    """
+    print("=== DELETE EVENT ===")
+    print(f"Event ID: {event_id}")
+    print(f"User: {request.user}")
+
+    event_instance = get_object_or_404(Event, pk=event_id)
+
+    # Verificar permisos (pertenencia a la misma organización)
+    organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
+    if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
+        return Response(
+            {"detail": "No tienes permisos para eliminar este evento"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    try:
+        event_instance.delete()
+        return Response({"detail": "Evento eliminado correctamente"}, status=status.HTTP_200_OK)
+    except Exception as delete_error:
+        return Response({"detail": f"Error al eliminar evento: {delete_error}"}, status=status.HTTP_400_BAD_REQUEST)
+
