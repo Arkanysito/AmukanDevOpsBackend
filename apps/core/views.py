@@ -1,3 +1,4 @@
+import logging
 from django.conf import settings
 from django.views.decorators.cache import never_cache
 from rest_framework.views import APIView
@@ -37,7 +38,7 @@ DASHBOARD_ID = 2  # tu dashboard en Metabase
 
 
 @api_view(["GET"])
-@authentication_classes([SessionAuthentication, JWTAuthentication])
+@authentication_classes([JWTAuthentication, SessionAuthentication])
 @permission_classes([IsAuthenticated])
 @never_cache
 def get_org_dashboard_embed_url(request):
@@ -50,8 +51,7 @@ def get_org_dashboard_embed_url(request):
     
     signed_url = build_signed_embed_url_for_dashboard(
         dashboard_id=DASHBOARD_ID,
-        locked_parameters={"organization_id": str(org_uuid)},
-        
+        locked_parameters={ },
     )
 
     if request.GET.get("debug") == "1":

@@ -3,6 +3,7 @@ import uuid
 from apps.organizations.models import Organization
 from apps.core.constants import ZoneLevel, PlaceType
 from django.contrib.postgres.fields import ArrayField
+from apps.recommendation.ml_model import encode_texts
 
 class Zone(models.Model):
     zone_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -40,5 +41,42 @@ class Place(models.Model):
         if self.zone_id:
             return f"{self.name}, Zone: {self.zone_id.name}"
         return f"{self.name}, Zone: Unknown"
-
     
+    def _generate_embedding_text(self):
+        """
+        Construye el texto que se usará para generar el embedding del Place.
+        Usamos los campos más descriptivos.
+        """
+        text_parts = [
+            self.name,
+            self.description,
+            self.get_type_display(),
+            self.address
+        ]
+        # Une solo los strings que no son None o vacíos
+        return " ".join(filter(None, text_parts))
+
+    def save(self, *args, **kwargs):
+        """
+        Sobrescribe save() para generar el embedding automáticamente.
+        """
+        # Evita recursión si solo estamos guardando el embedding
+        if 'update_fields' in kwargs and list(kwargs['update_fields']) == ['embedding']:
+            super().save(*args, **kwargs)
+            return
+
+        # Genera el texto y el embedding
+        text_to_embed = self._generate_embedding_text()
+        
+        if text_to_embed:
+            # Llama a tu función de ML
+            vector = encode_texts(text_to_embed) 
+            self.embedding = vector[0].tolist()
+        else:
+            self.embedding = None
+        
+        if 'update_fields' in kwargs and kwargs['update_fields'] is not None:
+            # Usamos set() para evitar duplicados y luego lo volvemos lista
+            kwargs['update_fields'] = list(set(list(kwargs['update_fields'])) | {'embedding'})
+
+        super().save(*args, **kwargs)

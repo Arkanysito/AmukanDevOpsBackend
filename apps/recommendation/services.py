@@ -1,81 +1,12 @@
-import numpy as np
-from django.db.models import Prefetch, Q
-from django.core.cache import cache
-from transformers import AutoTokenizer, AutoModel
-import torch
-import torch.nn.functional as F
-from datetime import timedelta
-from functools import lru_cache
-import hashlib
-import pickle
-import random
+# apps/recommendation/services.py
 
+import numpy as np
+from django.core.cache import cache
 from apps.users.models import CustomUser, UserInterest
 from apps.location.models import Place, Zone
-from apps.experiences.models import AccommodationService, ActivityService, Event
-from apps.core.constants import PlaceType, InteractionAction
-from apps.tracking.models import Interaction
-
-# ============================================================================
-# Singleton para el modelo - Carga UNA SOLA VEZ con transformers
-# ============================================================================
-class ModelSingleton:
-    _instance = None
-    _model = None
-    _tokenizer = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ModelSingleton, cls).__new__(cls)
-        return cls._instance
-    
-    def get_model(self):
-        if self._model is None:
-            print("Loading transformers model (one-time operation)...")
-            model_name = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self._model = AutoModel.from_pretrained(model_name)
-            print("Transformers model loaded successfully")
-        return self._model, self._tokenizer
-
-_model_singleton = ModelSingleton()
-
-def get_transformer_model():
-    return _model_singleton.get_model()
-
-def encode_texts(texts):
-    """
-    Reemplaza model.encode() de sentence-transformers
-    """
-    model, tokenizer = get_transformer_model()
-    
-    if isinstance(texts, str):
-        texts = [texts]
-    
-    # Tokenizar
-    encoded_input = tokenizer(
-        texts, 
-        padding=True, 
-        truncation=True, 
-        return_tensors='pt',
-        max_length=512
-    )
-    
-    # Generar embeddings
-    with torch.no_grad():
-        model_output = model(**encoded_input)
-    
-    # Mean pooling (igual que sentence-transformers)
-    embeddings = mean_pooling(model_output, encoded_input['attention_mask'])
-    embeddings = F.normalize(embeddings, p=2, dim=1)
-    
-    return embeddings.numpy()
-
-def mean_pooling(model_output, attention_mask):
-    """Implementación de mean pooling igual a sentence-transformers"""
-    token_embeddings = model_output[0]
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+from apps.experiences.models import ActivityService, Event
+from apps.core.constants import PlaceType
+from .ml_model import encode_texts, get_transformer_model
 
 # ============================================================================
 # Cache de vectores de usuario con Django Cache
@@ -102,8 +33,8 @@ def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
     
     # Optimización: select_related para evitar N+1 queries
     interests = UserInterest.objects.filter(user_id=user.id)\
-                  .select_related("interest_id")\
-                  .only('interest_id__name', 'weight')
+                .select_related("interest_id")\
+                .only('interest_id__name', 'weight')
     
     if not interests:
         return None
@@ -119,6 +50,11 @@ def get_user_vector(user: CustomUser, use_cache: bool = True) -> np.ndarray:
         weighted_embeddings.append(weighted_emb)
     
     user_embedding = np.mean(weighted_embeddings, axis=0)
+    
+    # NORMALIZAR EL VECTOR DEL USUARIO (ARREGLA LAS SIMILITUDES BAJAS)
+    user_norm = np.linalg.norm(user_embedding)
+    if user_norm > 0:
+        user_embedding = user_embedding / user_norm
     
     # Guardar en cache
     if use_cache:
@@ -190,9 +126,8 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
         # CAMBIO PRINCIPAL: Ahora usamos Place en lugar de AccommodationService
         accommodation_types = [
             PlaceType.HOTEL, PlaceType.HOSTEL, PlaceType.GUEST_HOUSE, 
-            PlaceType.APARTMENT, PlaceType.RESORT, PlaceType.VILLA,
-            PlaceType.BED_AND_BREAKFAST, PlaceType.MOTEL, PlaceType.LODGE,
-            PlaceType.HOLIDAY_HOME, PlaceType.CAMPSITE, PlaceType.COTTAGE
+            PlaceType.APARTMENT, PlaceType.RESORT, PlaceType.BED_BREAKFAST,
+            PlaceType.MOTEL, PlaceType.CAMPSITE
         ]
         interesting_types = [pt.value for pt in accommodation_types]
         
@@ -237,19 +172,24 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
             queryset = queryset.filter(zone_id=zone)
             
     elif service_type == 'place':
+        # Lista expandida de PlaceType que pueden considerarse "actividades"
         interesting_categories = [
-            PlaceType.ATTRACTION, PlaceType.VIEWPOINT, PlaceType.BEACH, PlaceType.PARK,
-            PlaceType.MUSEUM, PlaceType.GALLERY, PlaceType.ART_GALLERY, PlaceType.HISTORIC_SITE,
-            PlaceType.MONUMENT, PlaceType.CASTLE, PlaceType.THEATRE, PlaceType.CINEMA,
-            PlaceType.CONCERT_HALL, PlaceType.SPORTS_CENTRE, PlaceType.STADIUM,
-            PlaceType.NIGHTCLUB, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
-            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.BOTANICAL_GARDEN,
-            PlaceType.HOT_SPRING, PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK,
-            PlaceType.BOOKS, PlaceType.LIBRARY,
+            PlaceType.PARK, PlaceType.MUSEUM, PlaceType.BEACH, PlaceType.VIEWPOINT,
+            PlaceType.LIBRARY, PlaceType.CINEMA, PlaceType.THEATRE, PlaceType.STADIUM,
+            PlaceType.SPORTS_CENTRE, PlaceType.MARKETPLACE, PlaceType.SHOP, PlaceType.MALL,
+            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.NIGHTCLUB, PlaceType.ATTRACTION,
+            PlaceType.ARTWORK, PlaceType.GALLERY, PlaceType.THEME_PARK, PlaceType.GARDEN,
+            PlaceType.SWIMMING_POOL, PlaceType.GOLF_COURSE, PlaceType.FITNESS_CENTRE,
+            PlaceType.PLAYGROUND, PlaceType.MONUMENT, PlaceType.MEMORIAL, PlaceType.CASTLE,
+            PlaceType.RUINS, PlaceType.ARCHAEOLOGICAL_SITE, PlaceType.BOOKS,
+            PlaceType.CONCERT_HALL, PlaceType.BOTANICAL_GARDEN, PlaceType.HOT_SPRING,
+            PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK, PlaceType.ART_GALLERY,
+            PlaceType.HISTORIC_SITE, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
         ]
+        
         interesting_types = [pt.value for pt in interesting_categories]
         
-        base_fields = ['place_id', 'embedding', 'rating']
+        base_fields = ['place_id', 'embedding', 'rating', 'average_price'] # Añadido average_price
         queryset = Place.objects.exclude(embedding=None)\
             .filter(type__in=interesting_types)\
             .only(*base_fields, 'zone_id', 'name', 'type')
@@ -287,9 +227,9 @@ def cosine_similarity_numpy(vec1, vec2):
     return dot_product / (norm1 * norm2)
 
 def recommend_places(user: CustomUser, service_type: str, zone: Zone = None, 
-                    top_k: int = 20, use_cache: bool = True):
+                     top_k: int = 20, use_cache: bool = True, diversity_ratio: float = 0.3):
     """
-    Recomienda servicios con optimizaciones de rendimiento.
+    Recomienda servicios con diversificación para evitar sobre-especialización.
     """
     try:
         # Cache de recomendaciones completas
@@ -322,8 +262,8 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
             fallback = get_fallback_services(service_type, zone, top_k)
             return [(s, 0.5) for s in fallback]
         
-        # Si hay pocos servicios, combinar con fallback
-        if services_count < top_k:
+        # Si hay pocos servicios, no aplicar diversificación
+        if services_count < top_k * 1.5:
             services_list = list(services)
             embeddings_map = get_service_embeddings_batch(services_list)
             
@@ -332,7 +272,6 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 service_key = get_service_key(service)
                 if service_key in embeddings_map:
                     service_embedding = embeddings_map[service_key]
-                    # CAMBIO AQUÍ: usar numpy en lugar de cosine
                     score = cosine_similarity_numpy(u_vec, service_embedding)
                     results.append((service, float(score)))
             
@@ -354,11 +293,13 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
             
             return final_results
         
-        # Procesar todos los servicios
-        services_list = list(services[:top_k * 3])
+        # ESTRATEGIA CON DIVERSIFICACIÓN - Para cuando hay suficientes servicios
+        
+        # Obtener más servicios para permitir diversificación
+        services_list = list(services[:top_k * 5])  # Más servicios para seleccionar
         embeddings_map = get_service_embeddings_batch(services_list)
         
-        # Calcular similitudes en batch
+        # Calcular similitudes para todos los servicios
         results = []
         for service in services_list:
             service_key = get_service_key(service)
@@ -366,13 +307,14 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
                 continue
             
             service_embedding = embeddings_map[service_key]
-            # CAMBIO AQUÍ: usar numpy en lugar de cosine
             score = cosine_similarity_numpy(u_vec, service_embedding)
             results.append((service, float(score)))
         
-        # Ordenar y retornar top_k
+        # Ordenar por similitud
         results.sort(key=lambda x: x[1], reverse=True)
-        final_results = results[:top_k]
+        
+        # APLICAR DIVERSIFICACIÓN
+        final_results = _diversify_recommendations(results, top_k, diversity_ratio)
         
         # Cachear resultados (5 minutos)
         if use_cache and user is not None:
@@ -387,6 +329,104 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
         print(f"Error in recommend_places: {e}")
         fallback = get_fallback_services(service_type, zone, top_k)
         return [(s, 0.5) for s in fallback]
+
+
+def _diversify_recommendations(recommendations, top_k, diversity_ratio=0.3):
+    """
+    Diversifica las recomendaciones mezclando servicios similares y diversos.
+    
+    Args:
+        recommendations: Lista de (servicio, score) ordenada por score
+        top_k: Número total de recomendaciones a retornar
+        diversity_ratio: Proporción de recomendaciones diversas (0.0-1.0)
+    """
+    if len(recommendations) <= top_k:
+        return recommendations[:top_k]
+    
+    # Calcular cuántas recomendaciones diversas incluir
+    num_diverse = max(1, int(top_k * diversity_ratio))
+    num_main = top_k - num_diverse
+    
+    # Tomar las mejores recomendaciones (alta similitud)
+    main_recommendations = recommendations[:num_main * 2]  # Tomar el doble para seleccionar
+    
+    # Seleccionar recomendaciones diversas (de la parte media)
+    diverse_candidates = recommendations[num_main * 2:num_main * 2 + num_diverse * 3]
+    
+    # Estrategia de diversificación: mezclar por tipo/categoría
+    final_results = []
+    
+    # 1. Agregar las mejores recomendaciones (asegurar relevancia)
+    final_results.extend(main_recommendations[:num_main])
+    
+    # 2. Agregar recomendaciones diversas
+    if diverse_candidates:
+        # Seleccionar diversos intentando variar tipos/categorías
+        selected_diverse = _select_diverse_services(diverse_candidates, num_diverse)
+        final_results.extend(selected_diverse)
+    
+    # Si no conseguimos suficientes, completar con las siguientes mejores
+    if len(final_results) < top_k:
+        remaining = top_k - len(final_results)
+        # Tomar de las que no están ya seleccionadas
+        all_selected_ids = {service[0].place_id for service in final_results if hasattr(service[0], 'place_id')}
+        additional = [rec for rec in recommendations if get_service_key(rec[0]) not in all_selected_ids]
+        final_results.extend(additional[:remaining])
+    
+    return final_results[:top_k]
+
+
+def _select_diverse_services(candidates, num_to_select):
+    """
+    Selecciona servicios diversos basándose en tipos/categorías.
+    """
+    if not candidates or num_to_select <= 0:
+        return []
+    
+    selected = []
+    selected_types = set()
+    
+    for service, score in candidates:
+        if len(selected) >= num_to_select:
+            break
+        
+        # Obtener tipo/categoría del servicio
+        service_type = _get_service_category(service)
+        
+        # Si es un tipo nuevo, agregarlo para diversidad
+        if service_type not in selected_types:
+            selected.append((service, score))
+            selected_types.add(service_type)
+    
+    # Si no conseguimos suficientes tipos diversos, completar con los restantes
+    if len(selected) < num_to_select:
+        remaining = num_to_select - len(selected)
+        # Agregar los que no están ya seleccionados
+        selected_ids = {get_service_key(service) for service, score in selected}
+        additional = [candidate for candidate in candidates if get_service_key(candidate[0]) not in selected_ids]
+        selected.extend(additional[:remaining])
+    
+    return selected
+
+
+def _get_service_category(service):
+    """
+    Obtiene una categoría para el servicio para diversificación.
+    """
+    # Priorizar tipo específico
+    if hasattr(service, 'type'):
+        return getattr(service, 'type', 'unknown')
+    
+    # Para ActivityService, usar categoría
+    if hasattr(service, 'category'):
+        return getattr(service, 'category', 'unknown')
+    
+    # Para Event, usar categoría o tipo
+    if hasattr(service, 'category'):
+        return getattr(service, 'category', 'unknown')
+    
+    # Fallback: usar clase del modelo
+    return service.__class__.__name__
 
 
 # ============================================================================
@@ -437,20 +477,45 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
             services = services.filter(place_id__zone_id=zone)
         
         result = list(services.order_by('-rating')[:top_k])
-        
-    elif service_type in ['place', 'restaurant']:
+         
+    elif service_type == 'restaurant':
         interesting_types = [
-            'restaurant', 'cafe', 'attraction', 'viewpoint', 'beach', 'park', 
-            'museum', 'gallery', 'cinema', 'theatre'
+            PlaceType.RESTAURANT, PlaceType.CAFE, PlaceType.BAR, PlaceType.PUB,
         ]
+        interesting_types_values = [pt.value for pt in interesting_types]
+        
+        services = Place.objects.filter(type__in=interesting_types_values)\
+            .only('place_id', 'rating', 'name', 'type', 'zone_id')
+        
+        if zone:
+            services = services.filter(zone_id=zone)
+            
+        result = list(services.order_by('-rating')[:top_k])
+
+    elif service_type == 'place':
+        interesting_categories = [
+            PlaceType.PARK, PlaceType.MUSEUM, PlaceType.BEACH, PlaceType.VIEWPOINT,
+            PlaceType.LIBRARY, PlaceType.CINEMA, PlaceType.THEATRE, PlaceType.STADIUM,
+            PlaceType.SPORTS_CENTRE, PlaceType.MARKETPLACE, PlaceType.SHOP, PlaceType.MALL,
+            PlaceType.ZOO, PlaceType.AQUARIUM, PlaceType.NIGHTCLUB, PlaceType.ATTRACTION,
+            PlaceType.ARTWORK, PlaceType.GALLERY, PlaceType.THEME_PARK, PlaceType.GARDEN,
+            PlaceType.SWIMMING_POOL, PlaceType.GOLF_COURSE, PlaceType.FITNESS_CENTRE,
+            PlaceType.PLAYGROUND, PlaceType.MONUMENT, PlaceType.MEMORIAL, PlaceType.CASTLE,
+            PlaceType.RUINS, PlaceType.ARCHAEOLOGICAL_SITE, PlaceType.BOOKS,
+            PlaceType.CONCERT_HALL, PlaceType.BOTANICAL_GARDEN, PlaceType.HOT_SPRING,
+            PlaceType.SKI_RESORT, PlaceType.ADVENTURE_PARK, PlaceType.ART_GALLERY,
+            PlaceType.HISTORIC_SITE, PlaceType.SHOPPING_MALL, PlaceType.MARKET,
+        ]
+        interesting_types = [pt.value for pt in interesting_categories]
         
         services = Place.objects.filter(type__in=interesting_types)\
-            .only('place_id', 'rating', 'name', 'type', 'zone_id')
+            .only('place_id', 'rating', 'name', 'type', 'zone_id', 'average_price')
         
         if zone:
             services = services.filter(zone_id=zone)
         
         result = list(services.order_by('-rating')[:top_k])
+    
     else:
         result = []
     

@@ -4,6 +4,7 @@ from apps.organizations.models import Organization
 from apps.location.models import Place
 from apps.core.constants import AccommodationType, ActivityType, Currency, TransportType
 from django.contrib.postgres.fields import ArrayField
+from apps.recommendation.ml_model import encode_texts
 
 class AbstractService(models.Model):
     service_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -30,6 +31,42 @@ class AbstractService(models.Model):
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
+
+    def _generate_embedding_text(self):
+        """
+        Construye el texto que se usará para generar el embedding.
+        """
+        text_parts = [self.name, self.description]
+        
+        # Añadir tipo de servicio para más contexto
+        if hasattr(self, 'accommodation_type'):
+            text_parts.append(self.get_accommodation_type_display())
+        elif hasattr(self, 'activity_type'):
+            text_parts.append(self.get_activity_type_display())
+
+        return " ".join(filter(None, text_parts))
+
+    def save(self, *args, **kwargs):
+        """
+        Sobrescribe save() para generar el embedding automáticamente.
+        """
+        # Evita recursión si solo estamos guardando el embedding
+        if 'update_fields' in kwargs and list(kwargs['update_fields']) == ['embedding']:
+            super().save(*args, **kwargs)
+            return
+
+        # Genera el texto y el embedding
+        text_to_embed = self._generate_embedding_text()
+        if text_to_embed:
+            vector = encode_texts(text_to_embed) 
+            self.embedding = vector[0].tolist()
+        else:
+            self.embedding = None
+        
+        if 'update_fields' in kwargs and kwargs['update_fields'] is not None:
+            kwargs['update_fields'] = list(set(list(kwargs['update_fields'])) | {'embedding'})
+
+        super().save(*args, **kwargs)
 
 
 class AccommodationService(AbstractService):
@@ -72,5 +109,30 @@ class Event(models.Model):
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
     
-    
+    def _generate_embedding_text(self):
+        """
+        Construye el texto para el embedding del evento.
+        """
+        text_parts = [self.name, self.description]
+        return " ".join(filter(None, text_parts))
 
+    def save(self, *args, **kwargs):
+        """
+        Sobrescribe save() para generar el embedding automáticamente.
+        """
+        # Evita recursión
+        if 'update_fields' in kwargs and list(kwargs['update_fields']) == ['embedding']:
+            super().save(*args, **kwargs)
+            return
+
+        text_to_embed = self._generate_embedding_text()
+        if text_to_embed:
+            vector = encode_texts(text_to_embed)
+            self.embedding = vector[0].tolist()
+        else:
+            self.embedding = None
+        
+        if 'update_fields' in kwargs and kwargs['update_fields'] is not None:
+            kwargs['update_fields'] = list(set(list(kwargs['update_fields'])) | {'embedding'})
+
+        super().save(*args, **kwargs)

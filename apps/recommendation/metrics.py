@@ -1,7 +1,3 @@
-"""
-Módulo para calcular métricas de evaluación del sistema de recomendaciones
-"""
-
 import numpy as np
 import time
 from typing import List, Any, Callable
@@ -137,47 +133,82 @@ def calculate_conversion_rate(recommended_items: List[Any], interacted_items: Li
     converted_count = len(set(recommended_items) & set(interacted_items))
     return converted_count / len(recommended_items)
 
+def calculate_average_precision(recommended_items: List[Any], relevant_items: List[Any]) -> float:
+    """
+    Calcula Average Precision (AP) para una única lista de recomendaciones.
+    AP recompensa encontrar items relevantes más arriba en la lista.
+    """
+    if not relevant_items or not recommended_items:
+        return 0.0
+
+    relevant_set = set(relevant_items)
+    hits = 0
+    sum_precisions = 0.0
+
+    for k, item in enumerate(recommended_items):
+        if item in relevant_set:
+            hits += 1
+            precision_at_k = hits / (k + 1)
+            sum_precisions += precision_at_k
+
+    if not relevant_set: # Evitar división por cero si no hay items relevantes
+        return 0.0
+        
+    # Normalizar por el número total de items relevantes
+    return sum_precisions / len(relevant_set)
 
 class RecommendationMetrics:
     """Clase para calcular métricas completas del sistema de recomendaciones"""
-    
+
     def __init__(self):
         self.metrics_history = []
-    
-    def evaluate_recommendations(self, all_recommendations: List[List[Any]], 
-                               ground_truth: List[List[Any]], 
-                               total_catalog_size: int) -> dict:
+
+    def evaluate_recommendations(self, all_recommendations: List[List[Any]],
+                                 ground_truth: List[List[Any]],
+                                 total_catalog_size: int) -> dict:
         """
         Evalúa recomendaciones usando múltiples métricas
         """
         if len(all_recommendations) != len(ground_truth):
             raise ValueError("all_recommendations y ground_truth deben tener la misma longitud")
-        
-        k_values = [1, 5, 10]  # Valores de k para Precision@k y Recall@k
-        
+
+        k_values = [5, 10, 20] # Valores de k
         metrics = {}
-        
-        # Precision y Recall para diferentes k
+        all_ap_scores = [] # Para calcular MAP
+
+        # Precision, Recall y AP por usuario
+        for recs, truth in zip(all_recommendations, ground_truth):
+            user_ap = calculate_average_precision(recs, truth)
+            all_ap_scores.append(user_ap)
+
+            for k in k_values:
+                precision_key = f'precision@{k}'
+                recall_key = f'recall@{k}'
+                
+                # Inicializar listas si no existen
+                if precision_key not in metrics: metrics[precision_key] = []
+                if recall_key not in metrics: metrics[recall_key] = []
+
+                metrics[precision_key].append(calculate_precision_at_k(recs, truth, k))
+                metrics[recall_key].append(calculate_recall_at_k(recs, truth, k))
+
+        # Calcular promedios
         for k in k_values:
-            precision_scores = []
-            recall_scores = []
-            
-            for recs, truth in zip(all_recommendations, ground_truth):
-                precision_scores.append(calculate_precision_at_k(recs, truth, k))
-                recall_scores.append(calculate_recall_at_k(recs, truth, k))
-            
-            metrics[f'precision@{k}'] = np.mean(precision_scores)
-            metrics[f'recall@{k}'] = np.mean(recall_scores)
-        
-        # Cobertura
+            metrics[f'precision@{k}'] = np.mean(metrics[f'precision@{k}'])
+            metrics[f'recall@{k}'] = np.mean(metrics[f'recall@{k}'])
+
+        # Mean Average Precision (MAP)
+        metrics['map'] = np.mean(all_ap_scores)
+
+        # Cobertura (sin cambios)
         metrics['coverage'] = calculate_coverage(all_recommendations, total_catalog_size)
-        
-        # Guardar en historial
+
+        # Guardar en historial (sin cambios)
         self.metrics_history.append({
             'timestamp': time.time(),
             'metrics': metrics.copy()
         })
-        
+
         return metrics
     
     def get_metrics_trend(self) -> dict:
