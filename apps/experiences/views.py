@@ -16,6 +16,9 @@ from apps.experiences.models import (
     ActivityService,
     Event,
 )
+from apps.core.models import Image
+from apps.core.s3_utils import build_public_url
+
 
 # Campos base comunes a todos los servicios
 BASE_FIELDS = {
@@ -100,6 +103,10 @@ def get_user_services(request):
                 "check_out_time": str(acc.check_out_time) if acc.check_out_time else None,
                 #"created_at": acc.created_at.isoformat() if acc.created_at else None,
                 "details": acc.details,
+                "cover_image_url": (
+                    build_public_url(acc.cover_image.bucket, acc.cover_image.object_key)
+                    if acc.cover_image else None
+                ),                
             })
         
         # Activity services
@@ -119,7 +126,11 @@ def get_user_services(request):
                 "duration_minutes": act.duration_minutes,
                 "guide_included": act.guide_included,
                 #"created_at": act.created_at.isoformat() if act.created_at else None,
-                "details": acc.details,
+                "details": act.details,
+                "cover_image_url": (
+                    build_public_url(act.cover_image.bucket, act.cover_image.object_key)
+                    if act.cover_image else None
+                ),                
             })
         
         print(f"Total de servicios combinados: {len(services)}")
@@ -291,6 +302,14 @@ def create_service(request):
     try:
         with transaction.atomic():
             obj = Model.objects.create(**payload)
+            cover_image_id = request.data.get("cover_image_id")
+            if cover_image_id:
+                try:
+                    img = Image.objects.get(pk=cover_image_id)
+                    obj.cover_image = img
+                    obj.save(update_fields=["cover_image"])
+                except Image.DoesNotExist:
+                    pass
     except (IntegrityError, ValidationError) as e:
         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
@@ -488,6 +507,10 @@ def list_events(request):
                 "organization_id": str(event_instance.organization_id.organization_id) if event_instance.organization_id else None,
                 "place_id": str(event_instance.place_id.place_id) if event_instance.place_id else None,
                 # "created_at": event_instance.created_at.isoformat() if event_instance.created_at else None,
+                "cover_image_url": (
+                    build_public_url(event_instance.cover_image.bucket, event_instance.cover_image.object_key)
+                    if event_instance.cover_image else None
+                ),
             })
 
         return Response({"events": events_payload}, status=status.HTTP_200_OK)
@@ -586,6 +609,15 @@ def create_event(request):
         with transaction.atomic():
             event_created = Event.objects.create(**payload)
             print(f"Evento creado: {event_created.event_id} - {event_created.name}")
+        
+        cover_image_id = request.data.get("cover_image_id")
+        if cover_image_id:
+            try:
+                img = Image.objects.get(pk=cover_image_id)
+                event_created.cover_image = img
+                event_created.save(update_fields=["cover_image"])
+            except Image.DoesNotExist:
+                pass
 
         return Response(
             {"event_id": str(event_created.event_id), "name": event_created.name},
