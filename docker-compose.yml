@@ -91,26 +91,33 @@ services:
 # ------------------------ Inicializador de bucket y CORS ------------------------
   #Crea bucket amukan y aplica CORS
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc
     depends_on:
-      minio:
-        condition: service_started
+      - minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+
+        # Espera a que MinIO responda y configura alias
+        until mc alias set local http://minio:9000 minio minio12345; do
+          echo "minio no listo, reintentando..."; sleep 2;
+        done
+
+        # Crea el bucket si no existe
+        mc mb --ignore-existing local/${S3_BUCKET_NAME:-amukan}
+
+        # Acceso anónimo de lectura a TODO el bucket (no sólo /images)
+        mc anonymous set download local/${S3_BUCKET_NAME:-amukan}
+
+        # CORS (formato soportado por mc cors set)
+        echo '[{"AllowedMethod":["GET"],"AllowedOrigin":["*"],"AllowedHeader":["*"],"ExposeHeader":["ETag"],"MaxAgeSeconds":3000}]' >/tmp/cors.json
+        mc cors set local/${S3_BUCKET_NAME:-amukan} /tmp/cors.json
+
+        echo "Bucket público y CORS aplicado."
     environment:
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-amukan}
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio12345}
-    entrypoint: ["/bin/sh","-lc"]
-    command:
-      - >
-        set -e;
-        echo "Esperando a que MinIO acepte conexiones...";
-        for i in $(seq 1 60); do
-          mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" && break;
-          echo "MinIO no listo aún, reintentando ($$i/60)..."; sleep 2;
-        done;
-        mc mb -p local/"$${S3_BUCKET_NAME}" || true;
-        mc anonymous set none local/"$${S3_BUCKET_NAME}";
-        echo "Bucket listo y privado.";
     restart: "no"
 
 volumes:

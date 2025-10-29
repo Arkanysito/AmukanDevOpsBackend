@@ -7,3 +7,14 @@ def s3_client():
         aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "minio12345"),
         region_name=os.getenv("S3_REGION", "us-east-1"),
     )
+
+from django.conf import settings
+
+def build_public_url(bucket: str, key: str) -> str:
+    """
+    Devuelve la URL pública completa del objeto en MinIO.
+    Usa el endpoint público definido en settings.py.
+    """
+    base = getattr(settings, "S3_ENDPOINT_PUBLIC", "") or getattr(settings, "S3_ENDPOINT_URL", "")
+    base = base.rstrip("/")
+    return f"{base}/{bucket}/{key.lstrip('/')}"

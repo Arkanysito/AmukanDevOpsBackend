@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
+import json
 
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
@@ -98,6 +99,7 @@ def get_user_services(request):
                 "check_in_time": str(acc.check_in_time) if acc.check_in_time else None,
                 "check_out_time": str(acc.check_out_time) if acc.check_out_time else None,
                 #"created_at": acc.created_at.isoformat() if acc.created_at else None,
+                "details": acc.details,
             })
         
         # Activity services
@@ -117,6 +119,7 @@ def get_user_services(request):
                 "duration_minutes": act.duration_minutes,
                 "guide_included": act.guide_included,
                 #"created_at": act.created_at.isoformat() if act.created_at else None,
+                "details": acc.details,
             })
         
         print(f"Total de servicios combinados: {len(services)}")
@@ -253,6 +256,36 @@ def create_service(request):
 
     payload["organization_id"] = organization
     payload["place_id"] = place
+
+
+
+    cover_image_id   = request.data.get("cover_image_id")
+    cover_object_key = request.data.get("cover_object_key")
+    cover_public_url = request.data.get("cover_public_url")
+
+    raw_details = payload.get("details")
+    if isinstance(raw_details, str):
+        try:
+            details = json.loads(raw_details)
+            if not isinstance(details, dict):
+                details = {"text": raw_details}
+        except Exception:
+            details = {"text": raw_details}
+    elif isinstance(raw_details, dict):
+        details = raw_details
+    else:
+        details = {}
+
+    if cover_image_id or cover_object_key or cover_public_url:
+        details.setdefault("cover_image", {})
+        if cover_image_id:
+            details["cover_image"]["id"] = cover_image_id
+        if cover_object_key:
+            details["cover_image"]["object_key"] = cover_object_key
+        if cover_public_url:
+            details["cover_image"]["url"] = cover_public_url
+
+    payload["details"] = details   
 
     Model = MODEL_BY_TYPE[service_type]
     try:

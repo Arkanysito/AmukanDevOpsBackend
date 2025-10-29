@@ -2,27 +2,22 @@ from django.conf import settings
 from django.views.decorators.cache import never_cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, authentication_classes, permission_classes, parser_classes
 from .constants import Gender, Nationality, Language, ActivityType, AccommodationType, PlaceType, Currency
 from django.http import JsonResponse, HttpResponseForbidden
-from apps.core.metabase_embed import build_signed_embed_url_for_dashboard
 from django.views.decorators.cache import never_cache
 from django.utils.cache import add_never_cache_headers
-from apps.organizations.models import OrganizationUser
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, parser_classes
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from apps.organizations.models import OrganizationUser
 from apps.core.metabase_embed import build_signed_embed_url_for_dashboard
-from .constants import Gender, Nationality, Language
 import jwt
 import os, uuid
 from django.utils.timezone import now
 from rest_framework.parsers import MultiPartParser, FormParser
 from .models import Image
-from .s3_utils import s3_client
-
+from .s3_utils import s3_client,build_public_url
 
 
 class ChoicesView(APIView):
@@ -85,41 +80,31 @@ def _build_key(org_id, filename):
     return f"images/{org_id or 'public'}/{t.year:04d}/{t.month:02d}/{uuid.uuid4()}/{filename}"
 
 @api_view(["POST"])
-@authentication_classes([SessionAuthentication, JWTAuthentication])  # ya importados en tu archivo
+@authentication_classes([SessionAuthentication, JWTAuthentication])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser, FormParser])
 def upload_image(request):
     """
     Subida directa: el front envía multipart/form-data con 'file' (+ opcional 'organization_id').
-    Django hace stream a MinIO y solo guardamos metadatos + object_key en la tabla Image.
+    El backend sube a MinIO y guarda solo metadatos en la tabla Image.
     """
     f = request.FILES.get("file")
-    organization_id = request.data.get("organization_id")
-
     if not f:
-        return Response({"detail": "archivo 'file' requerido"}, status=400)
+        return Response({"detail": "Falta 'file'."}, status=400)
 
-    ct = f.content_type or "application/octet-stream"
-    if ct not in ALLOWED_CT:
-        return Response({"detail": "content_type no permitido"}, status=400)
-
-    if f.size <= 0 or f.size > MAX_BYTES:
-        return Response({"detail": f"tamaño inválido (max {MAX_BYTES} bytes)"}, status=400)
-
+    organization_id = request.data.get("organization_id")
     key = _build_key(organization_id, f.name)
+    ct = getattr(f, "content_type", None) or "application/octet-stream"
 
-    s3_client().put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=f,              # Django File stream
-        ContentType=ct,
-        ACL="private",
+    s3 = s3_client()
+    # Si tu bucket es público, puedes dejar ACL. Si es privado, elimina ExtraArgs y usa presigned URLs (no es el caso aquí).
+    s3.upload_fileobj(
+        f, BUCKET, key,
+        ExtraArgs={"ContentType": ct, "ACL": "public-read"}
     )
 
     img = Image.objects.create(
         object_key=key,
-        bucket=BUCKET,
-        storage="s3",
         content_type=ct,
         filename=f.name,
         organization_id=organization_id,
@@ -134,4 +119,5 @@ def upload_image(request):
         "bucket": BUCKET,
         "content_type": ct,
         "size": f.size,
+        "public_url": build_public_url(BUCKET, key),
     }, status=201)

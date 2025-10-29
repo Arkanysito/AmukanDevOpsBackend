@@ -232,3 +232,15 @@ CACHES = {
     }
 }
 """
+
+# ======================================================================
+# S3 / MinIO configuration
+# ======================================================================
+# Endpoint interno (para boto3 o SDK dentro de Docker)
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
+
+# Endpoint público (visible desde navegador)
+S3_ENDPOINT_PUBLIC = os.getenv("S3_ENDPOINT_PUBLIC", "http://localhost:9000")
+
+# Nombre del bucket (opcional, si lo usas en build_public_url)
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "amukan")
