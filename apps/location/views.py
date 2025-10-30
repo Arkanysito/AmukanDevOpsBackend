@@ -10,7 +10,9 @@ from django.contrib.gis.geos import Point
 
 from apps.organizations.models import OrganizationUser
 from apps.location.models import Place, Zone
-from django.contrib.gis.geos import Point
+
+from apps.core.models import Image
+from apps.core.s3_utils import build_public_url
 
 # Campos permitidos que pueden llegar desde el frontend para un Place
 PLACE_ALLOWED_FIELDS = {
@@ -69,7 +71,7 @@ def list_places(request):
         organization = organization_user.organization_id
         
         # Filtramos los Places por la organización del usuario
-        places = Place.objects.filter(organization_id=organization)
+        places = Place.objects.filter(organization_id=organization).select_related("cover_image")
         
         # Serializamos los datos (similar a get_place_detail)
         response_data = []
@@ -90,6 +92,10 @@ def list_places(request):
                 "rating": float(place.rating) if place.rating is not None else None,
                 "organization_id": str(place.organization_id.organization_id) if place.organization_id else None,
                 "zone_id": str(place.zone_id.zone_id) if place.zone_id else None,
+                "cover_image_url": (
+                    build_public_url(place.cover_image.bucket, place.cover_image.object_key)
+                    if place.cover_image else None
+                ),
             })
         
         return Response({"places": response_data}, status=status.HTTP_200_OK)
@@ -154,10 +160,23 @@ def create_place(request):
             place = Place.objects.create(**payload)
             print(f"Place creado: {place.place_id}")
 
+        cover_image_id = request.data.get("cover_image_id")
+        if cover_image_id:
+            try:
+                img = Image.objects.get(pk=cover_image_id)
+                place.cover_image = img
+                place.save(update_fields=["cover_image"])
+            except Image.DoesNotExist:
+                pass
+
         return Response(
             {
                 "place_id": str(place.place_id),
                 "name": place.name,
+                "cover_image_url": (
+                    build_public_url(place.cover_image.bucket, place.cover_image.object_key)
+                    if place.cover_image else None
+                ),
             },
             status=status.HTTP_201_CREATED,
         )
@@ -216,6 +235,10 @@ def get_place_detail(request, place_id: str):
         "rating": float(place.rating) if place.rating is not None else None,
         "organization_id": str(place.organization_id.organization_id) if place.organization_id else None,
         "zone_id": str(place.zone_id.zone_id) if place.zone_id else None,
+        "cover_image_url": (
+            build_public_url(place.cover_image.bucket, place.cover_image.object_key)
+            if place.cover_image else None
+        ),
     }
     
     return Response(response_data, status=status.HTTP_200_OK)
@@ -272,6 +295,19 @@ def update_place(request, place_id: str):
                 print(f"Setting {field_name} = {value}")
                 setattr(instancia, field_name, value)
             
+            cover_image_id = request.data.get("cover_image_id")
+            if cover_image_id is not None:
+                if str(cover_image_id).strip() == "":
+                    instancia.cover_image = None
+                    instancia.save(update_fields=["cover_image"])
+                else:
+                    try:
+                        img = Image.objects.get(pk=cover_image_id)
+                        instancia.cover_image = img
+                        instancia.save(update_fields=["cover_image"])
+                    except Image.DoesNotExist:
+                        pass
+
             instancia.save()
             print("Lugar actualizado exitosamente")
             
@@ -286,6 +322,10 @@ def update_place(request, place_id: str):
             "place_id": str(instancia.place_id),
             "name": instancia.name,
             "updated_fields": list(incoming.keys()),
+            "cover_image_url": (
+                build_public_url(place.cover_image.bucket, place.cover_image.object_key)
+                if place.cover_image else None
+            ),
         },
         status=status.HTTP_200_OK,
     )

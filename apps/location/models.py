@@ -36,6 +36,14 @@ class Place(models.Model):
     schedule = models.JSONField(blank=True, null=True)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
     embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True)
+    cover_image = models.ForeignKey(
+        "core.Image",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="place_cover_image",
+        db_index=True,
+    )
+
 
     def __str__(self):
         if self.zone_id:
