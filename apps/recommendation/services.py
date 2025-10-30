@@ -149,7 +149,10 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
             queryset = queryset.filter(place_id__zone_id=zone)
             
     elif service_type == 'event':
-        base_fields = ['event_id', 'embedding', 'rating', 'price']
+        base_fields = [
+            'event_id', 'embedding', 'rating', 'price', 
+            'name', 'description'
+        ]
         queryset = Event.objects.exclude(embedding=None)\
             .select_related('place_id')\
             .only(*base_fields, 'place_id__zone_id', 'start_date', 'end_date')

@@ -92,5 +92,6 @@ class PlaceSerializer(serializers.ModelSerializer):
             'name',
             'organization_name',
             'coordinates',
-            'type'
+            'type',
+            'average_price'
         ]

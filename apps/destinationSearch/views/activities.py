@@ -8,9 +8,10 @@ class ActivityListView(APIView):
     def get(self, request):
         params = request.query_params
         budget = params.get("budget")
-        place_type = params.get("type") # Para filtrar por un tipo específico
+        place_type = params.get("type")
 
-        # Lista de categorías de 'place' (atracciones) tomada de services.py
+        ordering = params.get("ordering")
+
         interesting_categories = [
             PlaceType.PARK, PlaceType.MUSEUM, PlaceType.BEACH, PlaceType.VIEWPOINT,
             PlaceType.LIBRARY, PlaceType.CINEMA, PlaceType.THEATRE, PlaceType.STADIUM,
@@ -27,16 +28,20 @@ class ActivityListView(APIView):
         
         interesting_types = [pt.value for pt in interesting_categories]
         
-        # Query base: Filtra 'Place' por los tipos de interés
         querys = Place.objects.filter(type__in=interesting_types)
         
         if budget:
-            # Usar 'average_price' de Place en lugar de 'price'
             querys = querys.filter(average_price__lte=budget)
         
         if place_type:
-            # Filtro adicional por tipo específico
             querys = querys.filter(type=place_type)
 
-        # Usar PlaceSerializer
+        if ordering == "price_asc":
+            querys = querys.order_by("average_price")
+        elif ordering == "price_desc":
+            querys = querys.order_by("-average_price")
+        else:
+            # Orden por defecto si no es por precio
+            querys = querys.order_by("-rating")
+
         return standard_response(querys, PlaceSerializer, "actividades")
