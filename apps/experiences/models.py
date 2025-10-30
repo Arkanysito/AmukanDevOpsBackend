@@ -18,6 +18,13 @@ class AbstractService(models.Model):
     policies = models.JSONField(blank=True, null=True)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
     embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True) 
+    cover_image = models.ForeignKey(
+        "core.Image",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="%(class)s_cover_image",
+        db_index=True,
+      )
 
     class Meta:
         abstract = True
@@ -91,6 +98,13 @@ class Event(models.Model):
     is_featured = models.BooleanField(default=False)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
     embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True)
+    cover_image = models.ForeignKey(
+        "core.Image",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        related_name="event_cover_image",
+        db_index=True,
+    )
 
     def __str__(self):
         return f"{self.name} - {self.organization_id.name} - {self.price}"
