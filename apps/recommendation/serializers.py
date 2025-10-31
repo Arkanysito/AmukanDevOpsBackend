@@ -2,6 +2,16 @@
 from rest_framework import serializers
 from apps.location.models import Place
 from apps.experiences.models import ActivityService, Event
+from apps.core.s3_utils import build_public_url
+
+
+def get_cover_image_url(self, obj):
+    """Calcula y devuelve la URL pública de la imagen de portada."""
+    # Se asume que obj.cover_image es un objeto con bucket y object_key,
+    # o es None si no hay imagen.
+    if obj.cover_image:
+        return build_public_url(obj.cover_image.bucket, obj.cover_image.object_key)
+    return None
 
 class PlaceRecoSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
@@ -9,7 +19,7 @@ class PlaceRecoSerializer(serializers.ModelSerializer):
     coordinates = serializers.SerializerMethodField()
     average_price = serializers.SerializerMethodField()
     place_id = serializers.CharField(source='pk') 
-
+    cover_image_url = serializers.SerializerMethodField()
     class Meta:
         model = Place
         fields = [
@@ -22,7 +32,10 @@ class PlaceRecoSerializer(serializers.ModelSerializer):
             "score",
             "coordinates",
             "average_price",
+            'cover_image_url',
         ]
+    
+    get_cover_image_url = get_cover_image_url
     
     def get_score(self, obj):
         return self.context.get('score', 0.0)
@@ -43,7 +56,7 @@ class ActivityServiceRecoSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='place_id.name', read_only=True)
     description = serializers.CharField(source='place_id.description', read_only=True)
     coordinates = serializers.SerializerMethodField()
-    
+    cover_image_url = serializers.SerializerMethodField()
     class Meta:
         model = ActivityService
         fields = [
@@ -54,7 +67,10 @@ class ActivityServiceRecoSerializer(serializers.ModelSerializer):
             "price",
             "coordinates",
             "score",
+            'cover_image_url',
         ]
+
+    get_cover_image_url = get_cover_image_url
 
     def get_score(self, obj):
         return self.context.get('score', 0.0)
@@ -68,7 +84,7 @@ class EventRecoSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
     event_id = serializers.CharField(source='pk')
     coordinates = serializers.SerializerMethodField()
-
+    cover_image_url = serializers.SerializerMethodField()
     name = serializers.CharField(read_only=True)
     description = serializers.CharField(read_only=True)
     
@@ -84,7 +100,10 @@ class EventRecoSerializer(serializers.ModelSerializer):
             "score",
             "start_date",
             "end_date",
+            'cover_image_url',
         ]
+
+    get_cover_image_url = get_cover_image_url    
 
     def get_score(self, obj):
         return self.context.get('score', 0.0)
