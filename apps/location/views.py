@@ -323,8 +323,8 @@ def update_place(request, place_id: str):
             "name": instancia.name,
             "updated_fields": list(incoming.keys()),
             "cover_image_url": (
-                build_public_url(place.cover_image.bucket, place.cover_image.object_key)
-                if place.cover_image else None
+                build_public_url(instancia.cover_image.bucket, instancia.cover_image.object_key)
+                if instancia.cover_image else None
             ),
         },
         status=status.HTTP_200_OK,
