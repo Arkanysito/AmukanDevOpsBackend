@@ -3,13 +3,71 @@ from django.contrib.gis.geos import Point
 import requests
 import json
 import time
+import uuid
+import mimetypes
+import os
+import traceback 
+from urllib.parse import unquote
+import datetime
+
 from django.core.cache import cache
 from apps.location.models import Place, Zone
 from apps.organizations.models import Organization
 from apps.core.constants import PlaceType, ZoneLevel
+from apps.core.models import Image
+
+import boto3
+from django.core.files.base import ContentFile
+from botocore.exceptions import NoCredentialsError
+
 
 class Command(BaseCommand):
     help = "Importa y enriquece puntos de interés desde OpenStreetMap para Viña del Mar"
+
+    # Variable de sesión de S3
+    s3_client = None
+    # Variable para el bucket
+    TARGET_BUCKET = None
+
+    def get_s3_client(self):
+        """
+        Inicializa y devuelve el cliente de Boto3 para MinIO,
+        leyendo las credenciales desde las variables de entorno.
+        """
+        if self.s3_client:
+            return self.s3_client
+            
+        try:
+            # Leemos directo de las variables de entorno que
+            # docker-compose está pasando al contenedor.
+            
+            access_key = os.environ.get('AWS_ACCESS_KEY_ID')
+            secret_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
+            endpoint_url = os.environ.get('S3_ENDPOINT_URL')
+            region = os.environ.get('S3_REGION')
+            self.TARGET_BUCKET = os.environ.get('S3_BUCKET_NAME')
+
+            if not all([access_key, secret_key, endpoint_url, self.TARGET_BUCKET]):
+                self.stdout.write(self.style.ERROR(
+                    "❌ Error fatal: Faltan variables de entorno (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_ENDPOINT_URL, S3_BUCKET_NAME)."
+                ))
+                return None
+
+            self.s3_client = boto3.client(
+                's3',
+                aws_access_key_id=access_key,
+                aws_secret_access_key=secret_key,
+                region_name=region,
+                endpoint_url=endpoint_url
+            )
+            return self.s3_client
+            
+        except NoCredentialsError as e:
+            self.stdout.write(self.style.ERROR(f"❌ Error fatal: Credenciales de S3 no encontradas. {e}"))
+            return None
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"❌ Error fatal al conectar con S3 (MinIO): {e}"))
+            return None
 
     def get_osm_data(self, polygon_wkt):
         """Obtiene datos de OSM usando Overpass API"""
@@ -399,7 +457,123 @@ class Command(BaseCommand):
         
         return PlaceType.UNKNOWN.value
 
+    # --- Función de API de Wikimedia ---
+    def get_wikimedia_image_url(self, file_title):
+        """
+        Obtiene la URL de una imagen desde la API de Wikimedia Commons.
+        Espera un título como 'File:Some_Image.jpg'.
+        """
+        # Asegurarse de que el título tenga el prefijo 'File:'
+        if not file_title.startswith('File:'):
+            file_title = f"File:{file_title}"
+            
+        WIKI_API_URL = "https://commons.wikimedia.org/w/api.php"
+        
+        params = {
+            "action": "query",
+            "format": "json",
+            "titles": file_title,
+            "prop": "imageinfo",
+            "iiprop": "url",
+            "iiurlwidth": 800  # Pedimos un thumbnail de 800px de ancho
+        }
+        
+        headers = {
+            'User-Agent': 'TravelPlannerApp/1.0 (python-requests)'
+        }
+        
+        try:
+            # Hacemos la petición a la API de Wikimedia
+            response = requests.get(WIKI_API_URL, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            # La estructura de la API de MediaWiki es anidada
+            pages = data.get('query', {}).get('pages', {})
+            if not pages:
+                self.stdout.write(self.style.WARNING(f"  -> API Wiki: No se encontraron 'pages' para {file_title}"))
+                return None
+
+            # Iteramos sobre las páginas (normalmente solo una, con ID -1 si falta)
+            for page_id, page_data in pages.items():
+                if page_id == "-1":
+                    self.stdout.write(self.style.WARNING(f"  -> API Wiki: El archivo {file_title} no existe en Commons."))
+                    return None
+                    
+                if 'imageinfo' in page_data:
+                    image_info = page_data['imageinfo'][0]
+                    
+                    # 'thumburl' es la URL del thumbnail que pedimos (800px)
+                    if 'thumburl' in image_info:
+                        return image_info['thumburl']
+                        
+                    # Fallback a la URL original si no hay thumbnail (menos ideal)
+                    if 'url' in image_info:
+                        return image_info['url']
+                        
+        except requests.exceptions.RequestException as e:
+            self.stdout.write(self.style.ERROR(f"  -> Error API Wikimedia: {e}"))
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"  -> Error procesando API Wikimedia: {e}"))
+            
+        return None
+    
+    def get_wikidata_image_info(self, wikidata_id):
+        """
+        Obtiene el nombre de archivo de la imagen (Propiedad P18) 
+        desde la API de Wikidata usando el Q-ID.
+        """
+        WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
+        
+        params = {
+            "action": "wbgetentities",
+            "format": "json",
+            "ids": wikidata_id,
+            "props": "claims"
+        }
+        
+        headers = {
+            'User-Agent': 'TravelPlannerApp/1.0 (python-requests)'
+        }
+
+        try:
+            response = requests.get(WIKIDATA_API_URL, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+
+            # Navegar la estructura de Wikidata
+            entities = data.get('entities', {})
+            if wikidata_id not in entities:
+                return None
+            
+            claims = entities[wikidata_id].get('claims', {})
+            
+            # P18 es la propiedad "image" en Wikidata
+            if 'P18' in claims:
+                # Tomamos la primera imagen
+                first_image_claim = claims['P18'][0]
+                image_filename = first_image_claim.get('mainsnak', {}).get('datavalue', {}).get('value')
+                
+                # Esto nos da el nombre del archivo, ej: "El Salto, Viña del Mar.jpg"
+                return image_filename
+                
+        except requests.exceptions.RequestException as e:
+            self.stdout.write(self.style.ERROR(f"  -> Error API Wikidata: {e}"))
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"  -> Error procesando API Wikidata: {e}"))
+            
+        return None
+
+
     def handle(self, *args, **kwargs):
+        
+        s3 = self.get_s3_client()
+        if not s3:
+            return # La función get_s3_client ya imprimió el error
+        
+        self.stdout.write(f"Conectado a S3 (MinIO). Usando bucket: {self.TARGET_BUCKET}")
+        
+        
         # Buscar comuna
         comuna = Zone.objects.filter(name__icontains="Viña del Mar", level=ZoneLevel.DISTRICT).first()
         if not comuna:
@@ -419,7 +593,7 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR("❌ No se pudieron obtener datos de OSM"))
             return
 
-        org = Organization.objects.first()
+        # Asignamos None por defecto a organización (Por lógica interna si una mepresaa es dueña nos lo debe comunicar)
         created_count = 0
         skipped_count = 0
         no_name_count = 0
@@ -455,37 +629,111 @@ class Command(BaseCommand):
             # ENRIQUECIMIENTO DE DATOS
             self.stdout.write(f"🔍 Procesando: {name}")
             
-            # 1. Obtener datos de Nominatim para dirección mejorada
             nominatim_data = self.enrich_with_nominatim(name, element['lat'], element['lon'])
-            
-            # 2. Estimar calidad basada en tags reales
             estimated_rating = self.estimate_quality_from_tags(tags)
-            
-            # 3. Obtener precio realista
             estimated_price = self.get_realistic_price_estimate(place_type, tags)
-            
-            # 4. Extraer características de accesibilidad
             accessibility_features = self.extract_accessibility_features(tags)
-            
-            # 5. Extraer horarios
             schedule = self.extract_schedule(tags)
-            
-            # 6. Crear descripción enriquecida
             description = self.create_enhanced_description(tags, nominatim_data)
-            
-            # 7. Construir dirección
             address = self.build_address(tags, nominatim_data)
             
             # Pequeña pausa para no saturar Nominatim
             if i % 5 == 0:
                 time.sleep(0.5)
 
+            # --- LÓGICA DE IMAGEN ---
+            cover_image_obj = None
+            image_url = tags.get('image') # 1. Prioridad: tag 'image' (link directo)
+            image_filename = None
+
+            # 2. Fallback a wikimedia_commons
+            if not image_url:
+                image_filename = tags.get('wikimedia_commons')
+                if image_filename:
+                    self.stdout.write(self.style.HTTP_INFO(f"  -> Encontrado 'wikimedia_commons': {image_filename}"))
+
+            # 3. Fallback a wikidata
+            if not image_url and not image_filename:
+                wikidata_id = tags.get('wikidata')
+                if wikidata_id:
+                    self.stdout.write(self.style.HTTP_INFO(f"  -> Buscando en Wikidata con ID: {wikidata_id}"))
+                    image_filename = self.get_wikidata_image_info(wikidata_id)
+                    if image_filename:
+                        self.stdout.write(self.style.HTTP_INFO(f"  -> Archivo encontrado en Wikidata: {image_filename}"))
+            
+            # Si tenemos un nombre de archivo (de wikidata o wikimedia_commons)
+            if image_filename and not image_url:
+                image_url = self.get_wikimedia_image_url(image_filename)
+                if image_url:
+                     self.stdout.write(f"  -> URL de Wikimedia obtenida: {image_url[:50]}...")
+                else:
+                     self.stdout.write(self.style.WARNING(f"  -> No se pudo obtener URL para {image_filename}"))
+
+            # Si al final de todo tenemos una URL, la descargamos y subimos a S3
+            if image_url:
+                try:
+                    # 1. Descargar la imagen en memoria
+                    img_response = requests.get(image_url, timeout=15, headers={'User-Agent': 'TravelPlannerApp/1.0'})
+                    img_response.raise_for_status()
+                    
+                    img_content_bytes = img_response.content
+                    img_content_size = len(img_content_bytes)
+                    
+                    # 2. Definir S3 object_key y metadata
+                    parsed_path = requests.utils.urlparse(image_url).path
+                    url_encoded_filename = os.path.basename(parsed_path)
+                    # Decodificamos el nombre para quitar %2C, %C3%B1, etc.
+                    base_filename = unquote(url_encoded_filename)
+
+                    if not base_filename or len(base_filename) > 200: 
+                        base_filename = f"{name.replace(' ', '_')}_{element['id']}.jpg"
+                    
+                    # Replicamos la ruta pública que SÍ funciona
+                    now = datetime.datetime.now()
+                    s3_object_key = f"images/public/{now.year}/{now.month:02d}/{uuid.uuid4()}/{base_filename}"
+                    
+                    content_type, _ = mimetypes.guess_type(base_filename)
+                    if not content_type:
+                        content_type = img_response.headers.get('Content-Type', 'application/octet-stream')
+
+                    # 3. Subir a S3 usando Boto3
+                    self.stdout.write(f"  -> Subiendo {s3_object_key} a S3 bucket {self.TARGET_BUCKET}...")
+                    s3.put_object(
+                        Bucket=self.TARGET_BUCKET, 
+                        Key=s3_object_key,
+                        Body=img_content_bytes,
+                        ContentType=content_type,
+                        ACL='public-read'
+                    )
+                    
+                    # 4. Crear el registro en la BD Image con los metadatos correctos
+                    cover_image_obj = Image.objects.create(
+                        organization_id=None, # Asignamos None
+                        object_key=s3_object_key,
+                        bucket=self.TARGET_BUCKET, 
+                        storage="s3", # Como en tu modelo
+                        status=Image.Status.STORED, # ¡La marcamos como guardada!
+                        size_bytes=img_content_size,
+                        content_type=content_type,
+                        filename=base_filename # Guardamos el nombre DECODIFICADO
+                    )
+                    
+                    self.stdout.write(self.style.SUCCESS(f"    🖼️  Foto subida y guardada: {s3_object_key}"))
+
+                except requests.exceptions.RequestException as e:
+                    self.stdout.write(self.style.ERROR(f"    ❌ Error descargando imagen {image_url}: {e}"))
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f"    ❌ Error procesando/subiendo imagen: {e}"))
+                    traceback.print_exc() # Imprime el error detallado
+            
+
+
             # Crear el lugar con todos los datos enriquecidos
             try:
                 place_data = {
                     'name': name,
                     'coordinates': point,
-                    'organization_id': org,
+                    'organization_id': None,
                     'zone_id': comuna,
                     'type': place_type,
                     'description': description,
@@ -500,6 +748,10 @@ class Command(BaseCommand):
                 if schedule:
                     place_data['schedule'] = schedule
                 
+                # Asignar la imagen
+                if cover_image_obj:
+                    place_data['cover_image'] = cover_image_obj
+                
                 Place.objects.create(**place_data)
                 
                 created_count += 1
@@ -512,6 +764,7 @@ class Command(BaseCommand):
                     
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"❌ Error creando {name}: {e}"))
+                traceback.print_exc()
 
         self.stdout.write(self.style.SUCCESS(
             f"\n🎉 Importación completada:\n"
