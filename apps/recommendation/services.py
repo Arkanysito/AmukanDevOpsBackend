@@ -265,59 +265,43 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
             fallback = get_fallback_services(service_type, zone, top_k)
             return [(s, 0.5) for s in fallback]
         
-        # Si hay pocos servicios, no aplicar diversificación
-        if services_count < top_k * 1.5:
-            services_list = list(services)
-            embeddings_map = get_service_embeddings_batch(services_list)
-            
-            results = []
-            for service in services_list:
-                service_key = get_service_key(service)
-                if service_key in embeddings_map:
-                    service_embedding = embeddings_map[service_key]
-                    score = cosine_similarity_numpy(u_vec, service_embedding)
-                    results.append((service, float(score)))
-            
-            # Agregar fallback si es necesario
-            if len(results) < top_k:
-                fallback_count = top_k - len(results)
-                fallback_services = get_fallback_services(service_type, zone, fallback_count)
-                results.extend([(s, 0.5) for s in fallback_services])
-            
-            results.sort(key=lambda x: x[1], reverse=True)
-            final_results = results[:top_k]
-            
-            # Cachear resultados (5 minutos)
-            if use_cache and user is not None:
-                cache_key = get_recommendations_cache_key(
-                    user.id, service_type, zone.zone_id if zone else None, top_k
-                )
-                cache.set(cache_key, final_results, timeout=300)
-            
-            return final_results
-        
-        # ESTRATEGIA CON DIVERSIFICACIÓN - Para cuando hay suficientes servicios
-        
-        # Obtener más servicios para permitir diversificación
-        services_list = list(services[:top_k * 5])  # Más servicios para seleccionar
+        # Obtener TODOS los servicios disponibles (sin límite inicial)
+        services_list = list(services)
         embeddings_map = get_service_embeddings_batch(services_list)
         
-        # Calcular similitudes para todos los servicios
+        # Calcular similitudes para todos los servicios, EVITANDO DUPLICADOS
         results = []
+        processed_ids = set()  # Para evitar duplicados
+        
         for service in services_list:
             service_key = get_service_key(service)
-            if service_key not in embeddings_map:
-                continue
             
-            service_embedding = embeddings_map[service_key]
-            score = cosine_similarity_numpy(u_vec, service_embedding)
-            results.append((service, float(score)))
+            # EVITAR PROCESAR EL MISMO SERVICIO MÚLTIPLES VECES
+            if service_key in processed_ids:
+                continue
+                
+            if service_key in embeddings_map:
+                service_embedding = embeddings_map[service_key]
+                score = cosine_similarity_numpy(u_vec, service_embedding)
+                results.append((service, float(score)))
+                processed_ids.add(service_key)  # Marcar como procesado
         
+        # Si no hay suficientes resultados, NO usar fallback para evitar duplicados
+        # Simplemente retornar los que hay
+        if not results:
+            return []
+            
         # Ordenar por similitud
         results.sort(key=lambda x: x[1], reverse=True)
         
-        # APLICAR DIVERSIFICACIÓN
-        final_results = _diversify_recommendations(results, top_k, diversity_ratio)
+        # Si tenemos menos servicios que el top_k solicitado, ajustar top_k real
+        actual_top_k = min(len(results), top_k)
+        
+        # SOLO aplicar diversificación si tenemos suficientes servicios diversos
+        if len(results) > actual_top_k * 1.2:
+            final_results = _diversify_recommendations(results, actual_top_k, diversity_ratio)
+        else:
+            final_results = results[:actual_top_k]
         
         # Cachear resultados (5 minutos)
         if use_cache and user is not None:
@@ -330,8 +314,23 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
         
     except Exception as e:
         print(f"Error in recommend_places: {e}")
-        fallback = get_fallback_services(service_type, zone, top_k)
-        return [(s, 0.5) for s in fallback]
+        # En caso de error, retornar servicios reales limitados sin fallback
+        try:
+            services = get_optimized_services_queryset(service_type, zone)
+            if services:
+                services_list = list(services[:top_k])
+                # Evitar duplicados incluso en el fallback
+                unique_services = []
+                processed_ids = set()
+                for service in services_list:
+                    service_key = get_service_key(service)
+                    if service_key not in processed_ids:
+                        unique_services.append((service, 0.5))
+                        processed_ids.add(service_key)
+                return unique_services
+            return []
+        except:
+            return []
 
 
 def _diversify_recommendations(recommendations, top_k, diversity_ratio=0.3):
