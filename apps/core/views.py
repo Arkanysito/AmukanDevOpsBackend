@@ -3,7 +3,7 @@ from django.conf import settings
 from django.views.decorators.cache import never_cache
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .constants import Gender, Nationality, Language, ActivityType, AccommodationType, PlaceType, Currency
+from .constants import Gender, Nationality, Language, ActivityType, AccommodationType, PlaceType, Currency, OrganizationCategory
 from django.http import JsonResponse, HttpResponseForbidden
 from django.views.decorators.cache import never_cache
 from django.utils.cache import add_never_cache_headers
@@ -33,7 +33,11 @@ class ChoicesView(APIView):
             "currency": [{"value": choice.value, "label": choice.label} for choice in Currency],
         })
 
-DASHBOARD_ID = 2  # tu dashboard en Metabase
+# --- Configuración de Dashboards ---
+PUBLIC_DASHBOARD_ID = 3  # <-- ID del Dashboard para org públicas
+PRIVATE_DASHBOARD_ID = 4 # <-- ID del Dashboard para cualquier otra org"
+
+METABASE_PARAM_NAME = "org_id" # Hay que crear un filtro con este mismo nombre
 
 
 
@@ -42,21 +46,39 @@ DASHBOARD_ID = 2  # tu dashboard en Metabase
 @permission_classes([IsAuthenticated])
 @never_cache
 def get_org_dashboard_embed_url(request):
-    org_uuid = OrganizationUser.objects.filter(user_id=request.user)\
-        .values_list("organization_id__organization_id", flat=True).first()
+    try:
+        # 1. Obtenemos el OrganizationUser y la Organización asociada
+        # Usamos select_related para obtener el objeto Organization en una sola consulta
+        org_user = OrganizationUser.objects.select_related('organization_id').get(user_id=request.user) #
+        org = org_user.organization_id #
 
-    if not org_uuid:
+    except OrganizationUser.DoesNotExist:
         return Response({"detail": "Usuario sin organización"}, status=403)
 
+    # 2. Obtenemos los datos de la organización
+    org_category = org.category
+    org_uuid_str = str(org.organization_id)
+
+    # 3. Lógica para decidir qué dashboard y qué parámetros usar
+    if org_category == OrganizationCategory.GOVERNMENT: 
+        # Es GOBIERNO: usa el dashboard público, sin parámetros
+        dashboard_id_to_use = PUBLIC_DASHBOARD_ID
+        locked_params = {} 
     
+    else:
+        dashboard_id_to_use = PRIVATE_DASHBOARD_ID
+        locked_params = {
+            # Bloquea el dashboard para que *solo* muestre datos de esta org
+            METABASE_PARAM_NAME: org_uuid_str
+        }
+
     signed_url = build_signed_embed_url_for_dashboard(
-        dashboard_id=DASHBOARD_ID,
-        locked_parameters={ },
+        dashboard_id=dashboard_id_to_use,
+        locked_parameters=locked_params,
     )
 
     if request.GET.get("debug") == "1":
         token = signed_url.split("/embed/dashboard/")[1].split("#")[0]
-        #Para inspección
         payload = jwt.decode(token, options={"verify_signature": False})
         return Response({
             "url": signed_url,
@@ -64,8 +86,10 @@ def get_org_dashboard_embed_url(request):
             "payload": payload,                   
             "context": {
                 "user_id": getattr(request.user, "id", None),
-                "organization_uuid": str(org_uuid),
-                "dashboard_id": DASHBOARD_ID,
+                "organization_uuid": org_uuid_str,
+                "organization_category": org_category,
+                "dashboard_id_sent": dashboard_id_to_use,
+                "params_sent": locked_params,
                 "metabase_base": settings.METABASE_PUBLIC_BASE_URL,
             }
         })
