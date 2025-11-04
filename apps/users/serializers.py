@@ -1,23 +1,105 @@
-from .models import CustomUser
+# apps/users/serializers.py
+
 from rest_framework import serializers
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
-from .models import UserFavorite
+from .models import CustomUser, UserFavorite
+from apps.organizations.models import OrganizationUser
+from apps.core.constants import OrganizationCategory
 
-from .models import CustomUser
-from rest_framework import serializers
+ALL_CREATION_OPTIONS = [
+    {
+        "key": "event",
+        "label": "Crear Evento",
+        "link": "/crear-servicio?tipo=event",
+        "icon": "🎉",
+    },
+    {
+        "key": "accommodation",
+        "label": "Crear Alojamiento",
+        "link": "/crear-servicio?tipo=accommodation",
+        "icon": "🏨",
+    },
+    {
+        "key": "activity",
+        "label": "Crear Actividad",
+        "link": "/crear-servicio?tipo=activity",
+        "icon": "🎯",
+    },
+]
+
+# Lógica de negocio (Sin cambios)
+def get_allowed_keys_for_category(category):
+    if category == OrganizationCategory.ACCOMMODATION:
+        return ["accommodation", "event"] # Se quitó "place"
+    elif category == OrganizationCategory.EVENT_PRODUCTION:
+        return ["event"]
+    elif category == OrganizationCategory.GOVERNMENT:
+        return ["activity", "event"]
+    elif category == OrganizationCategory.GASTRONOMY:
+        return ["event"] # Se quitó "place"
+    elif category == OrganizationCategory.TOURS_AND_ACTIVITIES:
+        return ["activity", "event"]
+    elif category == OrganizationCategory.TRANSPORT:
+        return ["transport", "event"]
+    elif category == OrganizationCategory.RETAIL:
+        return ["event"] # Se quitó "place"
+    else:
+        # Fallback: "Creo que todos pueden crear eventos"
+        return ["event"] if category else []
+
 
 class UserSerializer(serializers.ModelSerializer):
+    organization_category = serializers.SerializerMethodField()
+    creation_permissions = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomUser
         fields = [
             "id", "username", "email", "password",
             "first_name", "last_name",
-            "gender", "nationality", "language", "currency"
+            "gender", "nationality", "language", "currency",
+            "organization_category",
+            "creation_permissions"
         ]
         extra_kwargs = {
             "password": {"write_only": True, "required": False}
         }
+
+    def get_organization_category(self, user):
+        """
+        Lee la categoría desde la data precargada (prefetch_related)
+        """
+        org_user_set = user.organizationuser_set.all()
+        if org_user_set:
+            return org_user_set[0].organization_id.category
+        return None
+
+    def get_creation_permissions(self, user):
+        """
+        Lee la categoría del usuario (desde el prefetch) y devuelve
+        la lista filtrada de opciones de creación.
+        """
+        category = None
+        org_user_set = user.organizationuser_set.all()
+        if org_user_set:
+            category = org_user_set[0].organization_id.category
+        
+        elif not category and hasattr(user, 'id'):
+             try:
+                org_user = OrganizationUser.objects.select_related('organization_id').get(user_id=user)
+                category = org_user.organization_id.category
+             except OrganizationUser.DoesNotExist:
+                pass 
+        
+        allowed_keys = get_allowed_keys_for_category(category)
+        
+        allowed_options = [
+            option for option in ALL_CREATION_OPTIONS 
+            if option["key"] in allowed_keys
+        ]
+        
+        return allowed_options
 
     def create(self, validated_data):
         # Remueve password para usar create_user

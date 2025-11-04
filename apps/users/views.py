@@ -3,7 +3,7 @@
 from uuid import UUID
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from django.db import transaction, IntegrityError
+from django.db import transaction, IntegrityError, models
 from django.core.exceptions import ValidationError
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import generics, status
@@ -11,7 +11,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from sympy import Q
 from .models import CustomUser, Interest, UserInterest, UserFavorite
 from .serializers import (
     UserSerializer,
@@ -41,16 +40,16 @@ class CurrentUserView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response({
-            "username": request.user.username,
-            "email": request.user.email,
-            "first_name": request.user.first_name,
-            "last_name": request.user.last_name,
-            "gender": request.user.gender,
-            "nationality": request.user.nationality,
-            "language": request.user.language,
-            "currency": request.user.currency,
-        })
+        try:
+            user = CustomUser.objects.prefetch_related(
+                'organizationuser_set__organization_id'
+            ).get(id=request.user.id)
+        except CustomUser.DoesNotExist:
+             return Response({"detail": "Usuario no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+        
+        serializer = UserSerializer(user)
+        return Response(serializer.data)
+
     
     def patch(self, request):
         user = request.user
@@ -62,7 +61,6 @@ class CurrentUserView(APIView):
         try:
             with transaction.atomic():
                 updated_user = serializer.save()
-                # print(f"✅ User updated: {updated_user.first_name} {updated_user.last_name}")  # Debug
         except IntegrityError as e:
             msg = str(e).lower()
             if "email" in msg and "unique" in msg:
@@ -73,17 +71,9 @@ class CurrentUserView(APIView):
         except ValidationError as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({
-            "id": str(updated_user.id),
-            "username": updated_user.username,
-            "email": updated_user.email,
-            "first_name": updated_user.first_name,
-            "last_name": updated_user.last_name,
-            "gender": updated_user.gender,
-            "nationality": updated_user.nationality,
-            "language": updated_user.language,
-            "currency": updated_user.currency,
-        }, status=status.HTTP_200_OK)
+        # Devolver el objeto serializado completo para mantener consistencia
+        # El serializer buscará la data de org (fallback)
+        return Response(UserSerializer(updated_user).data, status=status.HTTP_200_OK)
 
 class UsernameAvailabilityView(APIView):
     def get(self, request):
@@ -144,8 +134,7 @@ def get_user_detail(request, user_id: str):
     try:
         obj = _get_user_by_identifier(user_id, request)
     except Http404 as e:
-         return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
-
+        return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
     err = _require_self_permission(request, obj, "ver")
     if err:
         return err
@@ -172,8 +161,7 @@ def update_user(request, user_id: str):
     try:
         obj = _get_user_by_identifier(user_id, request)
     except Http404 as e:
-         return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
-
+        return Response({"detail": str(e)}, status=status.HTTP_404_NOT_FOUND)
     err = _require_self_permission(request, obj, "editar")
     if err:
         return err
@@ -195,13 +183,11 @@ def update_user(request, user_id: str):
         logger.error(f"IntegrityError al actualizar usuario {user_id}: {e}")
         return Response({"detail": "Violación de unicidad o integridad"}, status=status.HTTP_400_BAD_REQUEST)
     except ValidationError as e:
-         logger.error(f"ValidationError al actualizar usuario {user_id}: {e}")
-         return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        logger.error(f"ValidationError al actualizar usuario {user_id}: {e}")
+        return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
-         logger.error(f"Error inesperado al actualizar usuario {user_id}: {e}", exc_info=True)
-         return Response({"detail": "Error interno al actualizar usuario"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
+        logger.error(f"Error inesperado al actualizar usuario {user_id}: {e}", exc_info=True)
+        return Response({"detail": "Error interno al actualizar usuario"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     data = {
         "id": str(user.id),
         "username": user.username,
@@ -253,42 +239,34 @@ class UserInterestsView(APIView):
         user = request.user
         interest_ids = request.data.get('interests', [])
         if not isinstance(interest_ids, list):
-             return Response({"detail": "El campo 'interests' debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
-
-
+            return Response({"detail": "El campo 'interests' debe ser una lista de IDs."}, status=status.HTTP_400_BAD_REQUEST)
         try:
             valid_interest_ids = []
             for interest_id in interest_ids:
-                 try:
-                      valid_interest_ids.append(UUID(str(interest_id)))
-                 except ValueError:
-                      logger.warning(f"ID de interés inválido '{interest_id}' recibido para usuario {user.id}")
-                      continue # Ignorar IDs inválidos
-
+                try:
+                    valid_interest_ids.append(UUID(str(interest_id)))
+                except ValueError:
+                    logger.warning(f"ID de interés inválido '{interest_id}' recibido para usuario {user.id}")
+                    continue
             with transaction.atomic():
-                UserInterest.objects.filter(user_id=user).delete() # Borrar existentes
-
+                UserInterest.objects.filter(user_id=user).delete()
                 existing_interests = Interest.objects.filter(interest_id__in=valid_interest_ids).values_list('interest_id', flat=True)
                 interests_to_create = []
                 for interest_uuid in existing_interests:
-                     interests_to_create.append(
-                          UserInterest(
-                               user_id=user,
-                               interest_id_id=interest_uuid,
-                               weight=1.0
-                          )
-                     )
+                    interests_to_create.append(
+                        UserInterest(
+                            user_id=user,
+                            interest_id_id=interest_uuid,
+                            weight=1.0
+                        )
+                    )
                 if interests_to_create:
-                     UserInterest.objects.bulk_create(interests_to_create)
-
-            # Invalidar caché del vector de usuario DIRECTAMENTE (sincrónico)
+                    UserInterest.objects.bulk_create(interests_to_create)
             try:
-                 invalidate_user_vector_cache(user.id) # Llama a la función importada
-                 logger.info(f"Intereses guardados para {user.id}. Cache de vector invalidado sincrónicamente.")
+                invalidate_user_vector_cache(user.id)
+                logger.info(f"Intereses guardados para {user.id}. Cache de vector invalidado sincrónicamente.")
             except Exception as cache_err:
-                 # Loguea el error pero no detengas el flujo principal del registro
-                 logger.error(f"Error al invalidar cache sincrónicamente para user {user.id}: {cache_err}")
-
+                logger.error(f"Error al invalidar cache sincrónicamente para user {user.id}: {cache_err}")
             return Response({"detail": "Intereses guardados correctamente"}, status=status.HTTP_200_OK)
 
         except Interest.DoesNotExist:
@@ -298,7 +276,6 @@ class UserInterestsView(APIView):
             return Response({"detail": f"Error al guardar intereses: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
     def get(self, request):
-        # ... (sin cambios) ...
         user = request.user
         user_interests = UserInterest.objects.filter(user_id=user).select_related('interest_id')
         interest_data = [{
@@ -307,7 +284,6 @@ class UserInterestsView(APIView):
         } for interest in user_interests]
         return Response(interest_data)
 
-# --- Función helper para buscar ContentType ambiguo (sin cambios) ---
 def find_content_type_for_activity_or_place(target_id_uuid: UUID):
     """
     Intenta encontrar un ActivityService o un Place con el UUID dado.
@@ -326,7 +302,7 @@ def find_content_type_for_activity_or_place(target_id_uuid: UUID):
         if Place.objects.filter(place_id=target_id_uuid).exists():
             return place_ct, target_id_uuid
     except ContentType.DoesNotExist:
-         logger.error("ContentType para Place no encontrado.")
+        logger.error("ContentType para Place no encontrado.")
 
     return None, None
 
