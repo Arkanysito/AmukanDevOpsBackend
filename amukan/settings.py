@@ -211,6 +211,7 @@ LOGGING = {
 # ============================================================================
 
 # Para desarrollo local (usando memoria)
+"""  # <--- COMENTA ESTE BLOQUE
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
@@ -221,11 +222,16 @@ CACHES = {
     }
 }
 """
-# Para producción (usando Redis - RECOMENDADO)
+
+# Para producción (usando Redis)
 CACHES = {
     'default': {
         'BACKEND': 'django_redis.cache.RedisCache',
-        'LOCATION': 'redis://127.0.0.1:6379/1',
+        
+        # ¡CORREGIR ESTA LÍNEA!
+        # NO USAR: 'redis://127.0.0.1:6379/1'
+        'LOCATION': 'redis://redis:6379/1',
+        
         'OPTIONS': {
             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
             'PARSER_CLASS': 'redis.connection.HiredisParser',
@@ -236,25 +242,10 @@ CACHES = {
             'SOCKET_CONNECT_TIMEOUT': 5,
             'SOCKET_TIMEOUT': 5,
         },
-        'KEY_PREFIX': 'reco',
-        'TIMEOUT': 300,  # 5 minutos por defecto
+        'KEY_PREFIX': 'reco', # (Prefijo de tu settings.py)
+        'TIMEOUT': 86400,     # 24 horas (o lo que necesites)
     }
 }
-
-# Para Memcached (alternativa a Redis)
-CACHES = {
-    'default': {
-        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
-        'LOCATION': '127.0.0.1:11211',
-        'OPTIONS': {
-            'no_delay': True,
-            'ignore_exc': True,
-            'max_pool_size': 4,
-            'use_pooling': True,
-        }
-    }
-}
-"""
 
 # ======================================================================
 # S3 / MinIO configuration

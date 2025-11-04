@@ -1,0 +1,56 @@
+# ===================================================================
+# Etapa 1: "Builder"
+# Aquí instalamos todas las dependencias pesadas de "desarrollo" (-dev)
+# ===================================================================
+FROM python:3.12-slim as builder
+
+WORKDIR /app
+
+# Instalar dependencias del sistema (las -dev)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libpq-dev \
+    libgdal-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crear un entorno virtual
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Instalar dependencias de Python
+# (Asegúrate de que requirements.txt ya NO tiene torch/transformers)
+# (Y SÍ tiene django-redis, hiredis, requests, gunicorn)
+COPY requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install numpy==1.26.4
+RUN pip install --no-cache-dir -r requirements.txt
+
+
+# ===================================================================
+# Etapa 2: "Final"
+# Esta es la imagen limpia y ligera que irá a producción
+# ===================================================================
+FROM python:3.12-slim
+
+# Instalar SOLO las dependencias de "runtime"
+# (gdal-bin en lugar de libgdal-dev, libpq5 en lugar de libpq-dev)
+RUN apt-get update && apt-get install -y \
+    gdal-bin \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copiar el entorno virtual COMPILADO desde el "builder"
+COPY --from=builder /opt/venv /opt/venv
+
+# Copiar el código de la aplicación
+# (Asegúrate de tener un .dockerignore para no copiar .git, .env, etc.)
+WORKDIR /app
+COPY . .
+
+# Activar el entorno virtual
+ENV PATH="/opt/venv/bin:$PATH"
+
+EXPOSE 8000
+
+# Comando por defecto (será sobreescrito por el compose)
+CMD ["gunicorn", "amukan.wsgi:application", "--bind", "0.0.0.0:8000"]

@@ -1,0 +1,33 @@
+# .dockerignore
+
+# Git
+.git
+.gitignore
+
+# Entorno virtual
+.venv
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Docker
+Dockerfile*
+docker-compose.yml
+.dockerignore
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Dependencias de Node (si tienes frontend aquí)
+node_modules/
+package-lock.json
+
+# Archivos de entorno
+.env
+*.env

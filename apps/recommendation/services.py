@@ -6,7 +6,7 @@ from apps.users.models import CustomUser, UserInterest
 from apps.location.models import Place, Zone
 from apps.experiences.models import ActivityService, Event
 from apps.core.constants import PlaceType
-from .ml_model import encode_texts, get_transformer_model
+from .ml_model import encode_texts
 
 # ============================================================================
 # Cache de vectores de usuario con Django Cache
@@ -526,22 +526,6 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
     
     return result
 
-
-# ============================================================================
-# Función para precarga de modelos
-# ============================================================================
-def warmup_recommendation_system():
-    """
-    Precarga el modelo en memoria durante el startup de Django.
-    """
-    try:
-        print("Warming up recommendation system...")
-        model, tokenizer = get_transformer_model()
-        # Test encoding
-        _ = encode_texts("test")
-        print("Recommendation system ready")
-    except Exception as e:
-        print(f"Warning: Could not warm up recommendation system: {e}")
 
 
 # ============================================================================
