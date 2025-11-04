@@ -7,12 +7,15 @@ from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError
 from django.contrib.gis.geos import Point
+import logging
 
 from apps.organizations.models import OrganizationUser
 from apps.location.models import Place, Zone
 
 from apps.core.models import Image
-from apps.core.s3_utils import build_public_url
+from apps.core.s3_utils import build_public_url, s3_client
+
+logger = logging.getLogger(__name__)
 
 # Campos permitidos que pueden llegar desde el frontend para un Place
 PLACE_ALLOWED_FIELDS = {
@@ -35,20 +38,15 @@ def list_zones(request):
     Obtener una lista de todas las Zonas
     """
     try:
-        # Ordenamos por nombre para que el dropdown se vea bien
         zones = Zone.objects.all().order_by('name') 
-        
         response_data = []
         for z in zones:
             response_data.append({
                 "zone_id": str(z.zone_id),
                 "name": z.name,
-                "level": z.get_level_display() # Muestra el label (ej: "Comuna")
+                "level": z.get_level_display()
             })
-        
-        # El frontend espera el JSON dentro de una clave "data"
         return Response({"data": response_data}, status=status.HTTP_200_OK) 
-
     except Exception as e:
         print(f"Error al listar zonas: {str(e)}")
         return Response({"detail": f"Error al listar zonas: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -70,10 +68,8 @@ def list_places(request):
         
         organization = organization_user.organization_id
         
-        # Filtramos los Places por la organización del usuario
         places = Place.objects.filter(organization_id=organization).select_related("cover_image")
         
-        # Serializamos los datos (similar a get_place_detail)
         response_data = []
         for place in places:
             response_data.append({
@@ -81,7 +77,7 @@ def list_places(request):
                 "name": place.name,
                 "description": place.description,
                 "address": place.address,
-                "type": place.type, # Ej: 'RESTAURANT', 'CAFE'
+                "type": place.type,
                 "coordinates": {
                     "type": "Point",
                     "coordinates": [place.coordinates.x, place.coordinates.y]
@@ -124,16 +120,14 @@ def create_place(request):
 
         payload = {k: v for k, v in request.data.items() if k in PLACE_ALLOWED_FIELDS}
 
-        # Validación de requeridos
         required = {"name", "description", "type", "coordinates"}
         missing = [f for f in required if payload.get(f) in (None, "")]
         if missing:
-             return Response(
+            return Response(
                 {"detail": "Faltan campos requeridos", "fields": sorted(missing)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-      
-        # 1. Zone (FK)
+        
         if "zone_id" in payload:
             zone_pk = payload.pop("zone_id")
             if zone_pk:
@@ -141,19 +135,16 @@ def create_place(request):
             else:
                 payload["zone_id"] = None
         
-        # 2. Coordinates (GeoDjango Point)
         coords_data = payload.pop("coordinates", None)
         if coords_data and coords_data.get("type") == "Point" and coords_data.get("coordinates"):
             try:
-                # GeoJSON es [longitud, latitud]
                 lon, lat = coords_data["coordinates"]
                 payload["coordinates"] = Point(float(lon), float(lat), srid=4326)
             except (TypeError, ValueError, IndexError):
-                 return Response({"detail": "Formato de 'coordinates' inválido"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"detail": "Formato de 'coordinates' inválido"}, status=status.HTTP_400_BAD_REQUEST)
         else:
-             return Response({"detail": "Campo 'coordinates' es requerido"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Campo 'coordinates' es requerido"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Asignar organización
         payload["organization_id"] = organization
 
         with transaction.atomic():
@@ -198,12 +189,9 @@ def get_place_detail(request, place_id: str):
     Obtener detalles de un Place específico.
     Usado por la vista 'EditarMiComercio' para 'Gastronomía'.
     """
-    print(f"=== GET PLACE DETAIL ===")
-    print(f"Place ID: {place_id}")
     
-    place = get_object_or_404(Place, pk=place_id)
+    place = get_object_or_404(Place.objects.select_related('cover_image'), pk=place_id)
     
-    # Verificar permisos (si el Place tiene organización)
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
     if place.organization_id:
         if not organization_user or place.organization_id != organization_user.organization_id:
@@ -211,23 +199,21 @@ def get_place_detail(request, place_id: str):
                 {"detail": "No tienes permisos para ver este lugar"},
                 status=status.HTTP_403_FORBIDDEN,
             )
-    # (Si no tiene org, podría ser un lugar público, pero para editar, asumimos que debe tener org)
     elif not organization_user:
-         return Response(
+        return Response(
             {"detail": "No tienes permisos para ver este lugar"},
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Serializar datos
     response_data = {
         "place_id": str(place.place_id),
         "name": place.name,
         "description": place.description,
         "address": place.address,
         "type": place.type,
-        "coordinates": { # Convertir Point a GeoJSON
+        "coordinates": {
             "type": "Point",
-            "coordinates": [place.coordinates.x, place.coordinates.y] # [long, lat]
+            "coordinates": [place.coordinates.x, place.coordinates.y]
         } if place.coordinates else None,
         "accessibility_features": place.accessibility_features,
         "average_price": float(place.average_price) if place.average_price is not None else None,
@@ -239,6 +225,8 @@ def get_place_detail(request, place_id: str):
             build_public_url(place.cover_image.bucket, place.cover_image.object_key)
             if place.cover_image else None
         ),
+        # Devolver también el ID de la imagen para el formulario de edición
+        "cover_image": {"public_url": build_public_url(place.cover_image.bucket, place.cover_image.object_key)} if place.cover_image else None,
     }
     
     return Response(response_data, status=status.HTTP_200_OK)
@@ -250,12 +238,12 @@ def update_place(request, place_id: str):
     """
     Actualizar un Place (Gastronomía)
     """
-    print(f"=== UPDATE PLACE ===")
-    print(f"Place ID: {place_id}")
-    print(f"User: {request.user}")
-    print(f"Request Data: {request.data}")
+
     
-    instancia = get_object_or_404(Place, pk=place_id)
+    instancia = get_object_or_404(Place.objects.select_related('cover_image'), pk=place_id)
+
+    # Guardar la referencia a la imagen ANTIGUA
+    old_image = instancia.cover_image
     
     # Verificar permisos
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
@@ -269,7 +257,7 @@ def update_place(request, place_id: str):
     print(f"Campos a actualizar: {list(incoming.keys())}")
 
     try:
-        with transaction.atomic():            
+        with transaction.atomic():
             # 1. Zone (FK)
             if "zone_id" in incoming:
                 zone_pk = incoming.pop("zone_id")
@@ -288,28 +276,50 @@ def update_place(request, place_id: str):
                     except (TypeError, ValueError, IndexError):
                         raise ValidationError("Formato de 'coordinates' inválido")
                 else:
-                     raise ValidationError("Formato de 'coordinates' inválido")
+                    raise ValidationError("Formato de 'coordinates' inválido")
 
             # Asignar el resto de campos
             for field_name, value in incoming.items():
                 print(f"Setting {field_name} = {value}")
                 setattr(instancia, field_name, value)
             
-            cover_image_id = request.data.get("cover_image_id")
-            if cover_image_id is not None:
-                if str(cover_image_id).strip() == "":
-                    instancia.cover_image = None
-                    instancia.save(update_fields=["cover_image"])
-                else:
-                    try:
-                        img = Image.objects.get(pk=cover_image_id)
-                        instancia.cover_image = img
-                        instancia.save(update_fields=["cover_image"])
-                    except Image.DoesNotExist:
-                        pass
-
             instancia.save()
-            print("Lugar actualizado exitosamente")
+            print("Lugar actualizado exitosamente (campos base)")
+
+            new_image_id = request.data.get("cover_image_id", "NO_ENVIADO")
+
+            if new_image_id == "NO_ENVIADO":
+                print("No se envió 'cover_image_id'. La imagen no se toca.")
+                pass 
+            
+            elif new_image_id:
+                try:
+                    new_image = Image.objects.get(pk=new_image_id)
+                    instancia.cover_image = new_image
+                    instancia.save(update_fields=["cover_image"])
+                    print(f"Imagen de portada actualizada a: {new_image_id}")
+                    
+                    if old_image and old_image.id != new_image.id:
+                        print(f"Borrando imagen antigua: {old_image.object_key}")
+                        s3 = s3_client()
+                        s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                        old_image.delete()
+                        print("Imagen antigua borrada exitosamente.")
+                        
+                except Image.DoesNotExist:
+                    print(f"ADVERTENCIA: Image ID {new_image_id} no encontrado. Ignorando.")
+
+            else:
+                print("Se recibió 'cover_image_id' nulo. Borrando imagen.")
+                instancia.cover_image = None
+                instancia.save(update_fields=["cover_image"])
+                
+                if old_image:
+                    print(f"Borrando imagen antigua: {old_image.object_key}")
+                    s3 = s3_client()
+                    s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                    old_image.delete()
+                    print("Imagen antigua borrada exitosamente.")
             
     except (ValidationError, Exception) as e:
         print(f"Error durante la actualización: {str(e)}")
@@ -337,7 +347,7 @@ def delete_place(request, place_id: str):
     """
     Eliminar un Place (Gastronomía)
     """
-    place = get_object_or_404(Place, pk=place_id)
+    place = get_object_or_404(Place.objects.select_related('cover_image'), pk=place_id) # Optimización
     
     # Verificar permisos
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
@@ -348,6 +358,17 @@ def delete_place(request, place_id: str):
         )
 
     try:
+        old_image = place.cover_image
+        if old_image:
+            print(f"Borrando imagen asociada: {old_image.object_key}")
+            try:
+                s3 = s3_client()
+                s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                old_image.delete()
+                print("Imagen asociada borrada exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al borrar imagen asociada {old_image.id} de S3: {e}", exc_info=True)
+        
         place.delete()
         return Response(
             {"detail": "Lugar eliminado correctamente"},
@@ -360,20 +381,15 @@ def delete_place(request, place_id: str):
         )
     
 @api_view(["GET"])
-@permission_classes([IsAuthenticated]) # Asegura que el usuario esté logueado
+@permission_classes([IsAuthenticated])
 def get_info_from_coords(request):
     """
     Recibe lat/lng y devuelve la Zona de PostGIS que contiene ese punto.
     """
     try:
-        # El frontend enviará 'lat' y 'lng' como query params
         lat = float(request.query_params.get('lat'))
         lng = float(request.query_params.get('lng'))
-        
-        # PostGIS usa (longitud, latitud)
         point = Point(lng, lat, srid=4326)
-
-        # La consulta de PostGIS: busca la Zona cuyo polígono 'coordinates' contiene el punto
         zona = Zone.objects.filter(coordinates__contains=point).first()
 
         if not zona:
@@ -381,8 +397,7 @@ def get_info_from_coords(request):
                 {"detail": "Punto fuera de las zonas registradas"}, 
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        # Devolvemos los datos de la zona encontrada
+        
         return Response({
             "zone_id": str(zona.zone_id),
             "zone_name": zona.name,

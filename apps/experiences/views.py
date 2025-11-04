@@ -8,6 +8,7 @@ from django.db import transaction, IntegrityError
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 import json
+import logging 
 
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
@@ -17,15 +18,14 @@ from apps.experiences.models import (
     Event,
 )
 from apps.core.models import Image
-from apps.core.s3_utils import build_public_url
+from apps.core.s3_utils import build_public_url, s3_client 
 
+logger = logging.getLogger(__name__) 
 
 # Campos base comunes a todos los servicios
 BASE_FIELDS = {
     "name", "description", "price", "price_currency", "details", "policies", "rating"
 }
-
-# Campos específicos por tipo
 TYPE_FIELDS = {
     "accommodation": {
         "accommodation_type",
@@ -51,7 +51,6 @@ MODEL_BY_TYPE = {
     "activity": ActivityService,
 }
 
-# apps/experiences/views.py - Actualiza la función get_user_services
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -59,49 +58,27 @@ def get_user_services(request):
     """
     Obtener todos los servicios de la organización a la que pertenece el usuario
     """
-    print(f"=== GET USER SERVICES ===")
-    print(f"Usuario autenticado: {request.user}")
-    print(f"User ID: {request.user.id}")
-    print(f"Username: {request.user.username}")
-    
     try:
-        # Buscar la relación OrganizationUser para este usuario
         organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
-        print(f"OrganizationUser encontrado: {organization_user}")
-        
         if not organization_user:
-            print("ERROR: No se encontró OrganizationUser")
             return Response(
                 {"detail": "El usuario no pertenece a ninguna organización"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
         organization = organization_user.organization_id
-        print(f"Organización: {organization}")
-        print(f"Organization ID: {organization.organization_id if organization else 'None'}")
-        
-        # Obtener todos los servicios de la organización
         services = []
-        
-        # Accommodation services
-        accommodations = AccommodationService.objects.filter(organization_id=organization)
-        print(f"Alojamientos encontrados: {accommodations.count()}")
+        accommodations = AccommodationService.objects.filter(organization_id=organization).select_related('cover_image')
         
         for acc in accommodations:
             services.append({
-                "service_id": str(acc.service_id),
-                "type": "accommodation",
-                "name": acc.name,
-                "description": acc.description,
-                "price": float(acc.price) if acc.price else None,
-                "price_currency": acc.price_currency,
-                "rating": float(acc.rating) if acc.rating else None,
-                "accommodation_type": acc.accommodation_type,
-                "beds": acc.beds,
+                "service_id": str(acc.service_id), "type": "accommodation", "name": acc.name,
+                "description": acc.description, "price": float(acc.price) if acc.price else None,
+                "price_currency": acc.price_currency, "rating": float(acc.rating) if acc.rating else None,
+                "accommodation_type": acc.accommodation_type, "beds": acc.beds,
                 "room_capacity": acc.room_capacity,
                 "check_in_time": str(acc.check_in_time) if acc.check_in_time else None,
                 "check_out_time": str(acc.check_out_time) if acc.check_out_time else None,
-                #"created_at": acc.created_at.isoformat() if acc.created_at else None,
                 "details": acc.details,
                 "cover_image_url": (
                     build_public_url(acc.cover_image.bucket, acc.cover_image.object_key)
@@ -109,41 +86,23 @@ def get_user_services(request):
                 ),                
             })
         
-        # Activity services
-        activities = ActivityService.objects.filter(organization_id=organization)
-        print(f"Actividades encontradas: {activities.count()}")
-        
+        activities = ActivityService.objects.filter(organization_id=organization).select_related('cover_image')
         for act in activities:
             services.append({
-                "service_id": str(act.service_id),
-                "type": "activity",
-                "name": act.name,
-                "description": act.description,
-                "price": float(act.price) if act.price else None,
-                "price_currency": act.price_currency,
-                "rating": float(act.rating) if act.rating else None,
-                "activity_type": act.activity_type,
-                "duration_minutes": act.duration_minutes,
-                "guide_included": act.guide_included,
-                #"created_at": act.created_at.isoformat() if act.created_at else None,
-                "details": act.details,
+                "service_id": str(act.service_id), "type": "activity", "name": act.name,
+                "description": act.description, "price": float(act.price) if act.price else None,
+                "price_currency": act.price_currency, "rating": float(act.rating) if act.rating else None,
+                "activity_type": act.activity_type, "duration_minutes": act.duration_minutes,
+                "guide_included": act.guide_included, "details": act.details,
                 "cover_image_url": (
                     build_public_url(act.cover_image.bucket, act.cover_image.object_key)
                     if act.cover_image else None
                 ),                
             })
         
-        print(f"Total de servicios combinados: {len(services)}")
-        
-        # Ordenar por fecha de creación (más recientes primero)
-        #services.sort(key=lambda x: x['created_at'] or '', reverse=True)
-        
         return Response({"services": services}, status=status.HTTP_200_OK)
-        
     except Exception as e:
-        print(f"EXCEPCIÓN: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error en get_user_services: {e}", exc_info=True)
         return Response({"detail": f"Error al obtener servicios: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(["GET"])
@@ -160,9 +119,8 @@ def get_service_detail(request, service_type: str, service_id: str):
         )
 
     Model = MODEL_BY_TYPE[tipo]
-    service = get_object_or_404(Model, pk=service_id)
+    service = get_object_or_404(Model.objects.select_related('cover_image'), pk=service_id)
     
-    # Verificar que el servicio pertenezca a la organización del usuario
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user or service.organization_id != organization_user.organization_id:
         return Response(
@@ -170,45 +128,31 @@ def get_service_detail(request, service_type: str, service_id: str):
             status=status.HTTP_403_FORBIDDEN,
         )
     
-    # Construir respuesta según el tipo
     response_data = {
-        "service_id": str(service.service_id),
-        "type": tipo,
-        "name": service.name,
-        "description": service.description,
-        "price": float(service.price) if service.price else None,
-        "price_currency": service.price_currency,
-        "details": service.details,
-        "policies": service.policies,
+        "service_id": str(service.service_id), "type": tipo, "name": service.name,
+        "description": service.description, "price": float(service.price) if service.price else None,
+        "price_currency": service.price_currency, "details": service.details, "policies": service.policies,
         "rating": float(service.rating) if service.rating else None,
         "organization_id": str(service.organization_id.organization_id) if service.organization_id else None,
         "place_id": str(service.place_id.place_id) if service.place_id else None,
-        #"created_at": service.created_at.isoformat() if service.created_at else None,
-        #"updated_at": service.updated_at.isoformat() if service.updated_at else None,
+        "cover_image": {"public_url": build_public_url(service.cover_image.bucket, service.cover_image.object_key)} if service.cover_image else None,
     }
     
-    # Agregar campos específicos del tipo
     if tipo == "accommodation":
         response_data.update({
-            "accommodation_type": service.accommodation_type,
-            "amenities": service.amenities,
-            "beds": service.beds,
-            "room_capacity": service.room_capacity,
+            "accommodation_type": service.accommodation_type, "amenities": service.amenities,
+            "beds": service.beds, "room_capacity": service.room_capacity,
             "check_in_time": str(service.check_in_time) if service.check_in_time else None,
             "check_out_time": str(service.check_out_time) if service.check_out_time else None,
             "parking": service.parking,
         })
     elif tipo == "transport":
         response_data.update({
-            "transport_type": service.transport_type,
-            "schedule": service.schedule,
-            "capacity": service.capacity,
+            "transport_type": service.transport_type, "schedule": service.schedule, "capacity": service.capacity,
         })
     elif tipo == "activity":
         response_data.update({
-            "activity_type": service.activity_type,
-            "duration_minutes": service.duration_minutes,
-            "guide_included": service.guide_included,
+            "activity_type": service.activity_type, "duration_minutes": service.duration_minutes, "guide_included": service.guide_included,
         })
     
     return Response(response_data, status=status.HTTP_200_OK)
@@ -216,6 +160,7 @@ def get_service_detail(request, service_type: str, service_id: str):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_service(request):
+    # (Sin cambios)
     service_type = (request.data.get("service_type") or "").lower()
     if service_type not in MODEL_BY_TYPE:
         return Response(
@@ -225,17 +170,13 @@ def create_service(request):
 
     # Obtener la organización del usuario autenticado
     try:
-        # Buscar la relación OrganizationUser para este usuario
         organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
-        
         if not organization_user:
             return Response(
                 {"detail": "El usuario no pertenece a ninguna organización"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
         organization = organization_user.organization_id
-        
     except OrganizationUser.DoesNotExist:
         return Response(
             {"detail": "El usuario no pertenece a ninguna organización"},
@@ -247,11 +188,9 @@ def create_service(request):
     if place_id:
         place = get_object_or_404(Place, pk=place_id)
 
-    # Aceptar solo campos permitidos para el tipo
     allowed = BASE_FIELDS | TYPE_FIELDS[service_type]
     payload = {k: v for k, v in request.data.items() if k in allowed}
 
-    # Validación de requeridos
     missing = []
     for f in ("name", "price", "price_currency"):
         if payload.get(f) in (None, ""):
@@ -267,8 +206,6 @@ def create_service(request):
 
     payload["organization_id"] = organization
     payload["place_id"] = place
-
-
 
     cover_image_id   = request.data.get("cover_image_id")
     cover_object_key = request.data.get("cover_object_key")
@@ -316,15 +253,9 @@ def create_service(request):
         return Response({"detail": f"Error al crear servicio: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
     return Response(
-        {
-            "service_id": str(getattr(obj, "service_id", obj.pk)),
-            "type": service_type,
-            "name": obj.name,
-        },
+        {"service_id": str(getattr(obj, "service_id", obj.pk)), "type": service_type, "name": obj.name,},
         status=status.HTTP_201_CREATED,
     )
-
-# apps/experiences/views.py - Actualiza SOLO la función update_service
 
 @api_view(["PATCH", "PUT"])
 @permission_classes([IsAuthenticated])
@@ -333,10 +264,6 @@ def update_service(request, service_type: str, service_id: str):
     Actualizar un servicio específico
     """
     print(f"=== UPDATE SERVICE ===")
-    print(f"Service Type: {service_type}")
-    print(f"Service ID: {service_id}")
-    print(f"User: {request.user}")
-    print(f"Request Data: {request.data}")
     
     tipo = (service_type or "").lower()
     if tipo not in MODEL_BY_TYPE:
@@ -346,9 +273,10 @@ def update_service(request, service_type: str, service_id: str):
         )
 
     Model = MODEL_BY_TYPE[tipo]
-    instancia = get_object_or_404(Model, pk=service_id)
+    instancia = get_object_or_404(Model.objects.select_related('cover_image'), pk=service_id)
     
-    # Verificar permisos
+    old_image = instancia.cover_image 
+
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user or instancia.organization_id != organization_user.organization_id:
         return Response(
@@ -356,13 +284,11 @@ def update_service(request, service_type: str, service_id: str):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Solo permitimos actualizar estos campos
     permitidos = BASE_FIELDS | TYPE_FIELDS[tipo] | {"place_id"}
     incoming = {k: v for k, v in request.data.items() if k in permitidos}
     
     print(f"Campos a actualizar: {list(incoming.keys())}")
 
-    # Resolver FKs si vienen en el body
     if "place_id" in incoming:
         place_pk = incoming.pop("place_id")
         if place_pk:
@@ -371,34 +297,63 @@ def update_service(request, service_type: str, service_id: str):
         else:
             instancia.place_id = None
 
-    # Asignar el resto de campos simples/específicos
     for field_name, value in incoming.items():
         print(f"Setting {field_name} = {value} (type: {type(value)})")
-        
-        # Manejar el campo amenities específicamente para evitar el error
         if field_name == "amenities":
-            # Si amenities es un string, convertirlo a lista
             if isinstance(value, str):
                 if value.strip():
                     value = [item.strip() for item in value.split(',')]
                 else:
                     value = []
-            # Si es una lista, asegurarse de que sea serializable
             elif isinstance(value, list):
                 value = value
             else:
                 value = []
             print(f"Processed amenities: {value}")
-        
         setattr(instancia, field_name, value)
 
     try:
         with transaction.atomic():
-            # EVITAR full_clean() temporalmente porque causa el error con arrays
-            # instancia.full_clean()  # ← COMENTA ESTA LINEA TEMPORALMENTE
-            
             instancia.save()
-            print("Servicio actualizado exitosamente")
+            print("Servicio actualizado exitosamente (campos base)")
+
+            new_image_id = request.data.get("cover_image_id", "NO_ENVIADO")
+
+            if new_image_id == "NO_ENVIADO":
+                print("No se envió 'cover_image_id'. La imagen no se toca.")
+                pass
+            
+            elif new_image_id:
+                try:
+                    new_image = Image.objects.get(pk=new_image_id)
+                    instancia.cover_image = new_image
+                    instancia.save(update_fields=["cover_image"])
+                    print(f"Imagen de portada actualizada a: {new_image_id}")
+                    
+                    # Borrar la antigua si era diferente
+                    if old_image and old_image.id != new_image.id:
+                        print(f"Borrando imagen antigua: {old_image.object_key}")
+                        s3 = s3_client()
+                        s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                        old_image.delete()
+                        print("Imagen antigua borrada exitosamente.")
+                        
+                except Image.DoesNotExist:
+                    print(f"ADVERTENCIA: Image ID {new_image_id} no encontrado. Ignorando.")
+
+            else:
+                print("Se recibió 'cover_image_id' nulo. Borrando imagen.")
+                instancia.cover_image = None
+                instancia.save(update_fields=["cover_image"])
+                
+                # Borrar la antigua si existía
+                if old_image:
+                    print(f"Borrando imagen antigua: {old_image.object_key}")
+                    s3 = s3_client()
+                    s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                    old_image.delete()
+                    print("Imagen antigua borrada exitosamente.")
+
     except Exception as e:
         print(f"Error durante la actualización: {str(e)}")
         import traceback
@@ -429,9 +384,8 @@ def delete_service(request, service_type: str, service_id: str):
         )
 
     Model = MODEL_BY_TYPE[tipo]
-    servicio = get_object_or_404(Model, pk=service_id)
+    servicio = get_object_or_404(Model.objects.select_related('cover_image'), pk=service_id)
     
-    # Verificar que el servicio pertenezca a la organización del usuario
     organization_user = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user or servicio.organization_id != organization_user.organization_id:
         return Response(
@@ -440,6 +394,17 @@ def delete_service(request, service_type: str, service_id: str):
         )
 
     try:
+        old_image = servicio.cover_image
+        if old_image:
+            print(f"Borrando imagen asociada: {old_image.object_key}")
+            try:
+                s3 = s3_client()
+                s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                old_image.delete()
+                print("Imagen asociada borrada exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al borrar imagen asociada {old_image.id} de S3: {e}", exc_info=True)
+
         servicio.delete()
         return Response(
             {"detail": "Servicio eliminado correctamente"},
@@ -466,29 +431,17 @@ def list_events(request):
     Obtener todos los eventos de la organización a la que pertenece el usuario
     (sin filtros adicionales, siguiendo el patrón de services).
     """
-    print("=== LIST EVENTS ===")
-    print(f"Usuario autenticado: {request.user}")
-    print(f"User ID: {request.user.id}")
-    print(f"Username: {request.user.username}")
-
     try:
-        # Buscar la relación OrganizationUser para este usuario
         organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
-        print(f"OrganizationUser encontrado: {organization_user_relation}")
-
         if not organization_user_relation:
             print("ERROR: No se encontró OrganizationUser")
             return Response(
                 {"detail": "El usuario no pertenece a ninguna organización"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         organization = organization_user_relation.organization_id
-        print(f"Organización: {organization}")
-        print(f"Organization ID: {organization.organization_id if organization else 'None'}")
-
-        # Obtener todos los eventos de la organización (sin filtros extra)
-        events_queryset = Event.objects.filter(organization_id=organization)
+        
+        events_queryset = Event.objects.filter(organization_id=organization).select_related('cover_image')
         print(f"Eventos encontrados: {events_queryset.count()}")
 
         events_payload = []
@@ -506,15 +459,12 @@ def list_events(request):
                 "is_featured": bool(event_instance.is_featured),
                 "organization_id": str(event_instance.organization_id.organization_id) if event_instance.organization_id else None,
                 "place_id": str(event_instance.place_id.place_id) if event_instance.place_id else None,
-                # "created_at": event_instance.created_at.isoformat() if event_instance.created_at else None,
                 "cover_image_url": (
                     build_public_url(event_instance.cover_image.bucket, event_instance.cover_image.object_key)
                     if event_instance.cover_image else None
                 ),
             })
-
         return Response({"events": events_payload}, status=status.HTTP_200_OK)
-
     except Exception as error:
         print(f"EXCEPCIÓN: {str(error)}")
         import traceback
@@ -528,13 +478,8 @@ def get_event_detail(request, event_id: str):
     """
     Obtener detalles de un evento específico
     """
-    print("=== GET EVENT DETAIL ===")
-    print(f"Event ID: {event_id}")
-    print(f"Usuario: {request.user} (id={request.user.id})")
+    event_instance = get_object_or_404(Event.objects.select_related('cover_image'), pk=event_id)
 
-    event_instance = get_object_or_404(Event, pk=event_id)
-
-    # Verificar que el evento pertenezca a la organización del usuario
     organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
         print("ERROR: Permisos insuficientes para ver el evento")
@@ -556,8 +501,7 @@ def get_event_detail(request, event_id: str):
         "rating": float(event_instance.rating) if event_instance.rating is not None else None,
         "organization_id": str(event_instance.organization_id.organization_id) if event_instance.organization_id else None,
         "place_id": str(event_instance.place_id.place_id) if event_instance.place_id else None,
-        # "created_at": event_instance.created_at.isoformat() if event_instance.created_at else None,
-        # "updated_at": event_instance.updated_at.isoformat() if event_instance.updated_at else None,
+        "cover_image": {"public_url": build_public_url(event_instance.cover_image.bucket, event_instance.cover_image.object_key)} if event_instance.cover_image else None,
     }
     return Response(response_data, status=status.HTTP_200_OK)
 
@@ -570,31 +514,22 @@ def create_event(request):
     Requeridos: name, start_date, end_date, price, price_currency
     Opcionales: description, details (JSON), is_featured, rating, place_id
     """
-    print("=== CREATE EVENT ===")
-    print(f"Usuario: {request.user} (id={request.user.id})")
-    print(f"Request Data: {request.data}")
-
     try:
-        # Buscar la relación OrganizationUser para este usuario
         organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
         if not organization_user_relation:
             return Response(
                 {"detail": "El usuario no pertenece a ninguna organización"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         organization = organization_user_relation.organization_id
-
-        # Resolver FK opcional place_id
+        
         place_instance = None
         place_id_param = request.data.get("place_id")
         if place_id_param:
             place_instance = get_object_or_404(Place, pk=place_id_param)
 
-        # Aceptar solo campos permitidos
         payload = {field: value for field, value in request.data.items() if field in EVENT_ALLOWED}
 
-        # Validación de requeridos
         missing_fields = [field for field in EVENT_REQUIRED if payload.get(field) in (None, "")]
         if missing_fields:
             print(f"Faltan: {missing_fields}")
@@ -636,14 +571,11 @@ def update_event(request, event_id: str):
     """
     Actualizar un evento específico
     """
-    print("=== UPDATE EVENT ===")
-    print(f"Event ID: {event_id}")
-    print(f"User: {request.user}")
-    print(f"Request Data: {request.data}")
+    
+    event_instance = get_object_or_404(Event.objects.select_related('cover_image'), pk=event_id)
+    
+    old_image = event_instance.cover_image
 
-    event_instance = get_object_or_404(Event, pk=event_id)
-
-    # Verificar permisos (pertenencia a la misma organización)
     organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
         return Response(
@@ -651,11 +583,9 @@ def update_event(request, event_id: str):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Solo permitimos actualizar estos campos
     fields_to_update = {field: value for field, value in request.data.items() if field in EVENT_ALLOWED}
     print(f"Campos a actualizar: {list(fields_to_update.keys())}")
 
-    # Resolver FK place_id si viene en el body
     if "place_id" in fields_to_update:
         place_id_param = fields_to_update.pop("place_id")
         if place_id_param:
@@ -663,16 +593,50 @@ def update_event(request, event_id: str):
         else:
             event_instance.place_id = None
 
-    # Asignar el resto de campos simples/específicos
     for field_name, field_value in fields_to_update.items():
         print(f"Setting {field_name} = {field_value} (type: {type(field_value)})")
         setattr(event_instance, field_name, field_value)
 
     try:
         with transaction.atomic():
-            # Mantener coherencia con services: sin full_clean() por temas con arrays, etc.
             event_instance.save()
             print("Evento actualizado exitosamente")
+            
+            new_image_id = request.data.get("cover_image_id", "NO_ENVIADO")
+
+            if new_image_id == "NO_ENVIADO":
+                print("No se envió 'cover_image_id'. La imagen no se toca.")
+                pass
+            
+            elif new_image_id:
+                try:
+                    new_image = Image.objects.get(pk=new_image_id)
+                    event_instance.cover_image = new_image # 'instancia' es un alias de 'event_instance'
+                    event_instance.save(update_fields=["cover_image"])
+                    print(f"Imagen de portada actualizada a: {new_image_id}")
+                    
+                    if old_image and old_image.id != new_image.id:
+                        print(f"Borrando imagen antigua: {old_image.object_key}")
+                        s3 = s3_client()
+                        s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                        old_image.delete()
+                        print("Imagen antigua borrada exitosamente.")
+                        
+                except Image.DoesNotExist:
+                    print(f"ADVERTENCIA: Image ID {new_image_id} no encontrado. Ignorando.")
+
+            else:
+                print("Se recibió 'cover_image_id' nulo. Borrando imagen.")
+                event_instance.cover_image = None
+                event_instance.save(update_fields=["cover_image"])
+                
+                if old_image:
+                    print(f"Borrando imagen antigua: {old_image.object_key}")
+                    s3 = s3_client()
+                    s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                    old_image.delete()
+                    print("Imagen antigua borrada exitosamente.")
+
     except Exception as update_error:
         print(f"Error durante la actualización: {str(update_error)}")
         import traceback
@@ -695,13 +659,8 @@ def delete_event(request, event_id: str):
     """
     Eliminar un evento
     """
-    print("=== DELETE EVENT ===")
-    print(f"Event ID: {event_id}")
-    print(f"User: {request.user}")
+    event_instance = get_object_or_404(Event.objects.select_related('cover_image'), pk=event_id)
 
-    event_instance = get_object_or_404(Event, pk=event_id)
-
-    # Verificar permisos (pertenencia a la misma organización)
     organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
     if not organization_user_relation or event_instance.organization_id != organization_user_relation.organization_id:
         return Response(
@@ -710,8 +669,18 @@ def delete_event(request, event_id: str):
         )
 
     try:
+        old_image = event_instance.cover_image
+        if old_image:
+            print(f"Borrando imagen asociada: {old_image.object_key}")
+            try:
+                s3 = s3_client()
+                s3.delete_object(Bucket=old_image.bucket, Key=old_image.object_key)
+                old_image.delete()
+                print("Imagen asociada borrada exitosamente.")
+            except Exception as e:
+                logger.error(f"Error al borrar imagen asociada {old_image.id} de S3: {e}", exc_info=True)
+
         event_instance.delete()
         return Response({"detail": "Evento eliminado correctamente"}, status=status.HTTP_200_OK)
     except Exception as delete_error:
         return Response({"detail": f"Error al eliminar evento: {delete_error}"}, status=status.HTTP_400_BAD_REQUEST)
-

@@ -11,41 +11,51 @@ ALL_CREATION_OPTIONS = [
     {
         "key": "event",
         "label": "Crear Evento",
-        "link": "/crear-servicio?tipo=event",
+        "link": "/crear-evento",
         "icon": "🎉",
     },
     {
         "key": "accommodation",
         "label": "Crear Alojamiento",
-        "link": "/crear-servicio?tipo=accommodation",
+        "link": "/crear-servicio/accommodation",
         "icon": "🏨",
     },
     {
         "key": "activity",
         "label": "Crear Actividad",
-        "link": "/crear-servicio?tipo=activity",
+        "link": "/crear-servicio/activity",
         "icon": "🎯",
+    },
+    {
+        "key": "place",
+        "label": "Crear Lugar",
+        "link": "/crear-lugar",
+        "icon": "📍",
+    },
+    {
+        "key": "transport",
+        "label": "Crear Transporte",
+        "link": "/crear-servicio/transport",
+        "icon": "🚗",
     },
 ]
 
-# Lógica de negocio (Sin cambios)
 def get_allowed_keys_for_category(category):
     if category == OrganizationCategory.ACCOMMODATION:
-        return ["accommodation", "event"] # Se quitó "place"
+        return ["accommodation", "place", "event"]
     elif category == OrganizationCategory.EVENT_PRODUCTION:
         return ["event"]
     elif category == OrganizationCategory.GOVERNMENT:
         return ["activity", "event"]
     elif category == OrganizationCategory.GASTRONOMY:
-        return ["event"] # Se quitó "place"
+        return ["place", "event"]
     elif category == OrganizationCategory.TOURS_AND_ACTIVITIES:
         return ["activity", "event"]
     elif category == OrganizationCategory.TRANSPORT:
         return ["transport", "event"]
     elif category == OrganizationCategory.RETAIL:
-        return ["event"] # Se quitó "place"
+        return ["place", "event"]
     else:
-        # Fallback: "Creo que todos pueden crear eventos"
         return ["event"] if category else []
 
 
