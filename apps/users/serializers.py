@@ -46,7 +46,7 @@ def get_allowed_keys_for_category(category):
     elif category == OrganizationCategory.EVENT_PRODUCTION:
         return ["event"]
     elif category == OrganizationCategory.GOVERNMENT:
-        return ["activity", "event"]
+        return ["activity", "place", "event"]
     elif category == OrganizationCategory.GASTRONOMY:
         return ["place", "event"]
     elif category == OrganizationCategory.TOURS_AND_ACTIVITIES:
