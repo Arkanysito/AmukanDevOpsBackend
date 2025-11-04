@@ -69,12 +69,18 @@ class SubscriptionPlan(models.TextChoices):
     ENTERPRISE = 'ENTERPRISE', 'Enterprise'
 
 class OrganizationCategory(models.TextChoices):
-    EDUCATION = 'EDUCATION', 'Educación'
-    HEALTHCARE = 'HEALTHCARE', 'Salud'
-    NONPROFIT = 'NONPROFIT', 'ONG'
     GOVERNMENT = 'GOVERNMENT', 'Gobierno'
-    TOURISM = 'TOURISM', 'Turismo'
-    PRIVATE = 'PRIVATE', 'Privada'
+    
+    ACCOMMODATION = 'ACCOMMODATION', 'Alojamiento'
+    GASTRONOMY = 'GASTRONOMY', 'Gastronomía'
+    TOURS_AND_ACTIVITIES = 'TOURS_AND_ACTIVITIES', 'Tours y Actividades'
+    EVENT_PRODUCTION = 'EVENT_PRODUCTION', 'Productora de Eventos'
+    TRANSPORT = 'TRANSPORT', 'Transporte'
+    RETAIL = 'RETAIL', 'Comercio'
+    
+    EDUCATION = 'EDUCATION', 'Educación'
+    CULTURE_AND_NONPROFIT = 'CULTURE_NONPROFIT', 'Cultura y ONG'
+    HEALTH_AND_WELLNESS = 'HEALTH_WELLNESS', 'Salud y Bienestar'
     OTHER = 'OTHER', 'Otro'
 
 class ZoneLevel(models.TextChoices):
