@@ -1,4 +1,4 @@
-from apps.experiences.models import Event, AccommodationService, ActivityService, TransportService
+from apps.experiences.models import Event, AccommodationService, ActivityService
 from django.db.models import Q
 
 def filter_events(budget=None, start_date=None, end_date=None):
@@ -19,14 +19,6 @@ def filter_accommodations(budget=None, travelers=None):
         querys = querys.filter(price__lte=budget)
     if travelers:
         querys = querys.filter(room_capacity__gte=travelers)
-    return querys
-
-def filter_transports(budget=None,travelers=None):
-    querys = TransportService.objects.all()
-    if budget:
-        querys = querys.filter(price__lte=budget)
-    if travelers:
-        querys = querys.filter(capacity__gte=travelers)
     return querys
 
 def filter_activities(budget=None):

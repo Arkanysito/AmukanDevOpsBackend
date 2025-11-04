@@ -48,14 +48,13 @@ INSTALLED_APPS = [
     'apps.organizations',
     'apps.location',
     'apps.experiences',
-    'apps.booking',
     'apps.travel',
     'apps.content',
     'apps.tracking',
     'apps.destinationSearch',
+    'apps.recommendation',
     'rest_framework',
     'corsheaders',
-    
 ]
 
 MB_EMBEDDING_APP_SECRET = os.getenv("MB_EMBEDDING_APP_SECRET")
@@ -183,3 +182,88 @@ SIMPLE_JWT = {
 
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = ["http://localhost:5173"]
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'loggers': {
+        '': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'django': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+# ============================================================================
+# Configuración de cache recomendada
+# ============================================================================
+
+# Para desarrollo local (usando memoria)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'recommendation-cache',
+        'OPTIONS': {
+            'MAX_ENTRIES': 10000
+        }
+    }
+}
+"""
+# Para producción (usando Redis - RECOMENDADO)
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': 'redis://127.0.0.1:6379/1',
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+            'PARSER_CLASS': 'redis.connection.HiredisParser',
+            'CONNECTION_POOL_CLASS_KWARGS': {
+                'max_connections': 50,
+                'retry_on_timeout': True,
+            },
+            'SOCKET_CONNECT_TIMEOUT': 5,
+            'SOCKET_TIMEOUT': 5,
+        },
+        'KEY_PREFIX': 'reco',
+        'TIMEOUT': 300,  # 5 minutos por defecto
+    }
+}
+
+# Para Memcached (alternativa a Redis)
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': '127.0.0.1:11211',
+        'OPTIONS': {
+            'no_delay': True,
+            'ignore_exc': True,
+            'max_pool_size': 4,
+            'use_pooling': True,
+        }
+    }
+}
+"""
+
+# ======================================================================
+# S3 / MinIO configuration
+# ======================================================================
+# Endpoint interno (para boto3 o SDK dentro de Docker)
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
+
+# Endpoint público (visible desde navegador)
+S3_ENDPOINT_PUBLIC = os.getenv("S3_ENDPOINT_PUBLIC", "http://localhost:9000")
+
+# Nombre del bucket (opcional, si lo usas en build_public_url)
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "amukan")

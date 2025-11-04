@@ -2,6 +2,10 @@ from django.db import models
 import uuid
 from django.contrib.auth.models import AbstractUser
 from apps.core.constants import Currency, Language, Nationality, Gender
+from uuid import uuid4
+from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 
 class TravelerType(models.Model):
     traveler_type_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -62,4 +66,22 @@ class UserTravelerTypeHistory(models.Model):
     def __str__(self):
         return f"{self.user_id.username} - {self.traveler_type_id.name}"
 
+class UserFavorite(models.Model):
+    user_fav_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_id = models.ForeignKey(
+        CustomUser, 
+        on_delete=models.CASCADE,
+        related_name='favorites'
+    )
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.UUIDField()
+    target = GenericForeignKey('content_type', 'object_id')
+    created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        unique_together = ['user_id', 'content_type', 'object_id']
+        verbose_name = 'User Favorite'
+        verbose_name_plural = 'User Favorites'
+
+    def __str__(self):
+        return f"{self.user_id.username} - {self.target}"

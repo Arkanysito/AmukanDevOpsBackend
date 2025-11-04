@@ -1,31 +1,38 @@
-# Imagen oficial de Python 3.13
-FROM python:3.13-slim
+FROM python:3.12-slim
 
-# Instala GDAL y dependencias del sistema
+# Instalar dependencias del sistema incluyendo Chrome
 RUN apt-get update && apt-get install -y \
-    gdal-bin libgdal-dev \
-    libgeos-dev libproj-dev \
-    libspatialindex-dev \
-    binutils \
-    libpq-dev \
+    wget \
+    gnupg \
+    curl \
+    && curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y google-chrome-stable \
+    fonts-freefont-ttf \
+    fontconfig \
+    && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Variables necesarias para compilar los bindings
-ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
-ENV C_INCLUDE_PATH=/usr/include/gdal
+# Instalar dependencias para GDAL y PostgreSQL
+RUN apt-get update && apt-get install -y \
+    gdal-bin \
+    libgdal-dev \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
-# Crea directorio del proyecto
 WORKDIR /app
 
-# Copia e instala dependencias Python
-COPY requirements.txt /app/
-RUN pip install --upgrade pip && pip install -r requirements.txt
+COPY requirements.txt .
 
-# Copia el resto del código fuente
-COPY . /app
+# Instalar pip y numpy PRIMERO para evitar conflictos
+RUN pip install --upgrade pip
+RUN pip install numpy==1.26.4
 
-# Exponer el puerto para Django
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
 EXPOSE 8000
-
-# Comando por defecto
 CMD ["sh", "-c", "sleep 10 && python manage.py runserver 0.0.0.0:8000"]

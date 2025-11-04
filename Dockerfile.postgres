@@ -1,0 +1,10 @@
+# Dockerfile.postgres
+FROM pgvector/pgvector:pg15
+
+# Instalar solo PostGIS (pgvector ya viene incluido)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        postgis \
+        postgresql-15-postgis-3 \
+        postgresql-15-postgis-3-scripts && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
