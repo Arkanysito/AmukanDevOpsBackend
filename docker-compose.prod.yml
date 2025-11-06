@@ -1,5 +1,6 @@
 services:
   web:
+    image: amukan-backend-web:prod
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,10 +9,6 @@ services:
     #volumes:
       #- .:/app
     depends_on:
-      db:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -19,51 +16,32 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_HOST: db
-      POSTGRES_PORT: 5432
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
       SECRET_KEY: ${SECRET_KEY}
 
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-amukan}
-      S3_REGION: ${S3_REGION:-us-east-1}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://minio:9000}
-      S3_ENDPOINT_PUBLIC: ${S3_ENDPOINT_PUBLIC:-http://localhost:9000}
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minio}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minio12345}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_REGION: ${S3_REGION}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_ENDPOINT_PUBLIC: ${S3_ENDPOINT_PUBLIC}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
       UPLOAD_ALLOWED_CONTENT_TYPES: ${UPLOAD_ALLOWED_CONTENT_TYPES:-image/jpeg,image/png,image/webp}
-
-    #command: >
-    #  sh -c "sleep 10 && python manage.py runserver 0.0.0.0:8000"
+      
+      HF_API_TOKEN: ${HF_API_TOKEN}
+    networks:
+      - default
     
     command: >
       sh -c "python manage.py migrate && 
              gunicorn amukan.wsgi:application --bind 0.0.0.0:8000 --workers 4"
-
-  db:
-    build:
-      context: .
-      dockerfile: Dockerfile.postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init_pgvector.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   redis:
     image: redis:7-alpine
     container_name: redis_cache
     restart: always
     ports:
-      #Descomenta esto solo si necesitas acceder a Redis desde local
       - "6379:6379"
     volumes:
       - redis_data:/data
@@ -72,6 +50,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
 
   metabase:
     image: metabase/metabase:latest
@@ -84,63 +64,15 @@ services:
       MB_EMBEDDING_APP_SECRET: ${MB_EMBEDDING_APP_SECRET}
     volumes:
       - metabase_data:/metabase-data
-    depends_on:
-      db:
-        condition: service_healthy
+    networks:
+      - default
 
-  minio:
-    image: minio/minio:latest
-    container_name: minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minio12345}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    # Healthcheck simple; si tu imagen no trae curl, cámbialo por 'wget -qO-'
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 20   
-
-# ------------------------ Inicializador de bucket y CORS ------------------------
-  #Crea bucket amukan y aplica CORS
-  minio-init:
-    image: minio/mc
-    depends_on:
-      - minio
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-
-        # Espera a que MinIO responda y configura alias
-        until mc alias set local http://minio:9000 minio minio12345; do
-          echo "minio no listo, reintentando..."; sleep 2;
-        done
-
-        # Crea el bucket si no existe
-        mc mb --ignore-existing local/${S3_BUCKET_NAME:-amukan}
-
-        # Acceso anónimo de lectura a TODO el bucket (no sólo /images)
-        mc anonymous set download local/${S3_BUCKET_NAME:-amukan}
-
-        # CORS (formato soportado por mc cors set)
-        echo '[{"AllowedMethod":["GET"],"AllowedOrigin":["*"],"AllowedHeader":["*"],"ExposeHeader":["ETag"],"MaxAgeSeconds":3000}]' >/tmp/cors.json
-        mc cors set local/${S3_BUCKET_NAME:-amukan} /tmp/cors.json
-
-        echo "Bucket público y CORS aplicado."
-    environment:
-      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-amukan}
-    restart: "no"
 
 volumes:
-  postgres_data:
   metabase_data:
-  minio_data:
   redis_data:
+
+networks:
+  default:
+    driver: bridge
+    enable_ipv6: false

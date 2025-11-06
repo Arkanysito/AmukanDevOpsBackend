@@ -17,15 +17,16 @@ shapely==2.0.4
 # Dependencias de ML/API
 requests
 numpy==1.26.4
+huggingface-hub
 
 # Dependencias de Caché
+redis==4.6.0
 django-redis==5.4.0
 hiredis==2.3.2
 
 # --- ELIMINADAS ---
 # Dependencias de ML
 # transformers==4.40.0
-# huggingface-hub==0.24.0
 # torch==2.3.1 --index-url https://download.pytorch.org/whl/cpu
 
 # Dependencias de Scraping (Selenium)

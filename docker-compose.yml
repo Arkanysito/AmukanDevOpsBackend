@@ -1,5 +1,6 @@
 services:
   web:
+    image: amukan-backend-web:dev
     build:
       context: .
       dockerfile: Dockerfile
