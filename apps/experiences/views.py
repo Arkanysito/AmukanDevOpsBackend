@@ -9,6 +9,8 @@ from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 import json
 import logging 
+from django.utils import timezone
+from datetime import datetime
 
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
@@ -428,8 +430,7 @@ EVENT_REQUIRED = {"name", "start_date", "end_date", "price", "price_currency"}
 @permission_classes([IsAuthenticated])
 def list_events(request):
     """
-    Obtener todos los eventos de la organización a la que pertenece el usuario
-    (sin filtros adicionales, siguiendo el patrón de services).
+    Obtener todos los eventos FUTUROS de la organización a la que pertenece el usuario
     """
     try:
         organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
@@ -441,8 +442,14 @@ def list_events(request):
             )
         organization = organization_user_relation.organization_id
         
-        events_queryset = Event.objects.filter(organization_id=organization).select_related('cover_image')
-        print(f"Eventos encontrados: {events_queryset.count()}")
+        # Filtrar solo eventos futuros (end_date >= hoy)
+        now = timezone.now()
+        events_queryset = Event.objects.filter(
+            organization_id=organization,
+            end_date__gte=now  # Solo eventos que no han terminado
+        ).select_related('cover_image')
+        
+        print(f"Eventos futuros encontrados: {events_queryset.count()}")
 
         events_payload = []
         for event_instance in events_queryset:
