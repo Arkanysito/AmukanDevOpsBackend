@@ -31,7 +31,7 @@ class AccommodationServiceSerializer(serializers.ModelSerializer):
             'description',
             'price',
             'beds',
-            'room_capacity',
+            'capacity',
             'check_in_time',
             'check_out_time',
             'place_coordinates',
@@ -53,7 +53,7 @@ class PlaceAccommodationSerializer(serializers.ModelSerializer):
     
     # Campos por defecto
     beds = serializers.IntegerField(default=2, read_only=True)
-    room_capacity = serializers.IntegerField(default=2, read_only=True)
+    capacity = serializers.IntegerField(default=2, read_only=True)
     check_in_time = serializers.TimeField(default="14:00", read_only=True)
     check_out_time = serializers.TimeField(default="12:00", read_only=True)
 
@@ -66,7 +66,7 @@ class PlaceAccommodationSerializer(serializers.ModelSerializer):
             'description',
             'price',
             'beds',
-            'room_capacity',
+            'capacity',
             'check_in_time',
             'check_out_time',
             'place_coordinates',

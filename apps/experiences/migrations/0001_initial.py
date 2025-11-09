@@ -32,7 +32,7 @@ class Migration(migrations.Migration):
                 ('accommodation_type', models.CharField(choices=[('HOTEL', 'Hotel'), ('HOSTEL', 'Hostal'), ('AIRBNB', 'Airbnb'), ('CAMPING', 'Camping'), ('GUESTHOUSE', 'Casa de huéspedes'), ('CABIN', 'Cabaña'), ('INN', 'Hostería'), ('APARTMENT', 'Departamento'), ('BED_BREAKFAST', 'Bed & Breakfast'), ('SPA', 'Termas')], max_length=15)),
                 ('amenities', models.JSONField(blank=True, null=True)),
                 ('beds', models.IntegerField()),
-                ('room_capacity', models.IntegerField()),
+                ('capacity', models.IntegerField()),
                 ('check_in_time', models.TimeField()),
                 ('check_out_time', models.TimeField()),
                 ('parking', models.BooleanField(default=False)),

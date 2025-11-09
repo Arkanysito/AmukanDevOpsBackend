@@ -24,4 +24,5 @@ urlpatterns = [
     path('api/auth/user/', get_user_profile, name='user-profile'),
     path('api/choices/', ChoicesView.as_view(), name='choices'),
     path('api/location/', include("apps.location.urls")),
+    path('api/', include('apps.booking.urls')),
 ]

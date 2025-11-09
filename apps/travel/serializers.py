@@ -10,28 +10,59 @@ class ItineraryItemDetailSerializer(serializers.ModelSerializer):
     service_type = serializers.SerializerMethodField()
     direccion = serializers.SerializerMethodField()
     coordenadas = serializers.SerializerMethodField()
+
+    booking_id = serializers.ReadOnlyField(source='booking.booking_id', allow_null=True)
+    booking_status = serializers.SerializerMethodField()
     
     class Meta:
         model = ItineraryItem
         fields = [
             'item_id', 'scheduled_date', 'estimated_cost', 'estimated_cost_currency',
-            'service_name', 'service_type', 'direccion', 'coordenadas'
+            'service_name', 'service_type', 'direccion', 'coordenadas', 
+            'booking_id', 'booking_status'
         ]
+    
+    def get_booking_status(self, obj):
+        """
+        Devuelve el estado de la reserva para el frontend.
+        """
+        if obj.booking:
+            return obj.booking.get_state_display()
+
+        app_label = obj.content_type.app_label
+        model_name = obj.content_type.model
+        
+        if app_label == 'experiences' and model_name in ['activityservice', 'accommodationservice', 'event']:
+            return "No Reservado"
+        
+        if app_label == 'location' and model_name == 'place':
+            return "No Aplicable"
     
     def get_service_name(self, obj):
         """Obtiene el nombre del servicio"""
         try:
+            # PRIMERO: Usar obj.reservable si está disponible
             if obj.reservable:
                 return getattr(obj.reservable, 'name', 'Servicio sin nombre')
             
-            # Fallback: intentar obtener el objeto manualmente
+            # SEGUNDO: Buscar manually con los campos CORRECTOS
             model_class = obj.content_type.model_class()
             if model_class:
-                service_obj = model_class.objects.filter(
-                    **{f'{obj.content_type.model}_id': obj.object_id}
-                ).first()
-                if service_obj:
-                    return getattr(service_obj, 'name', 'Servicio sin nombre')
+                # MAPEO DE CAMPOS ID CORRECTOS POR MODELO
+                id_field_map = {
+                    'accommodationservice': 'service_id',
+                    'activityservice': 'service_id', 
+                    'event': 'event_id',
+                    'place': 'place_id'
+                }
+                
+                id_field = id_field_map.get(obj.content_type.model)
+                if id_field:
+                    service_obj = model_class.objects.filter(
+                        **{id_field: obj.object_id}
+                    ).first()
+                    if service_obj:
+                        return getattr(service_obj, 'name', 'Servicio sin nombre')
                     
         except Exception as e:
             print(f"Error obteniendo service_name: {e}")
@@ -41,13 +72,12 @@ class ItineraryItemDetailSerializer(serializers.ModelSerializer):
         return obj.content_type.model
     
     def get_direccion(self, obj):
-        """Obtiene la dirección - como no usamos address, generamos una basada en coordenadas"""
+        """Obtiene la dirección"""
         try:
             coordenadas = self.get_coordenadas(obj)
             if coordenadas:
                 return f"Ubicación: {coordenadas.get('lat', 'N/A')}, {coordenadas.get('lng', 'N/A')}"
             
-            # Si no hay coordenadas, usar el nombre del servicio
             service_name = self.get_service_name(obj)
             return f"{service_name} - Ubicación no especificada"
                         
@@ -56,20 +86,30 @@ class ItineraryItemDetailSerializer(serializers.ModelSerializer):
         return 'Ubicación no disponible'
     
     def get_coordenadas(self, obj):
-        """Obtiene las coordenadas del servicio - VERSIÓN SIMPLIFICADA"""
+        """Obtiene las coordenadas del servicio"""
         try:
-            # Método 1: Usar el objeto relacionado directamente
+            # Método 1: Usar obj.reservable si está disponible
             if obj.reservable:
                 return self._extraer_coordenadas_desde_objeto(obj.reservable)
             
-            # Método 2: Buscar manualmente el objeto
+            # Método 2: Buscar manualmente
             model_class = obj.content_type.model_class()
             if model_class:
-                service_obj = model_class.objects.filter(
-                    **{f'{obj.content_type.model}_id': obj.object_id}
-                ).first()
-                if service_obj:
-                    return self._extraer_coordenadas_desde_objeto(service_obj)
+                # MAPEO DE CAMPOS ID CORRECTOS
+                id_field_map = {
+                    'accommodationservice': 'service_id',
+                    'activityservice': 'service_id',
+                    'event': 'event_id', 
+                    'place': 'place_id'
+                }
+                
+                id_field = id_field_map.get(obj.content_type.model)
+                if id_field:
+                    service_obj = model_class.objects.filter(
+                        **{id_field: obj.object_id}
+                    ).first()
+                    if service_obj:
+                        return self._extraer_coordenadas_desde_objeto(service_obj)
                     
         except Exception as e:
             print(f"Error obteniendo coordenadas: {e}")
@@ -93,7 +133,7 @@ class ItineraryItemDetailSerializer(serializers.ModelSerializer):
                 if hasattr(place, 'coordinates') and place.coordinates:
                     return self._formatear_coordenadas(place.coordinates)
             
-            # CASO 3: El servicio tiene coordenadas directas (por si acaso)
+            # CASO 3: El servicio tiene coordenadas directas
             elif hasattr(service_obj, 'coordinates') and service_obj.coordinates:
                 return self._formatear_coordenadas(service_obj.coordinates)
                 
@@ -105,7 +145,7 @@ class ItineraryItemDetailSerializer(serializers.ModelSerializer):
     def _formatear_coordenadas(self, coordinates):
         """Formatea las coordenadas para el frontend"""
         try:
-            # Para Django GIS PointField - el formato más común
+            # Para Django GIS PointField
             if hasattr(coordinates, 'x') and hasattr(coordinates, 'y'):
                 return {
                     'lat': float(coordinates.y),
