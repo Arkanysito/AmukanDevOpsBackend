@@ -366,7 +366,7 @@ class Command(BaseCommand):
                             "estacionamiento": random.choice([True, False])
                         },
                         beds=random.randint(1, 4),
-                        room_capacity=random.randint(1, 6),
+                        capacity=random.randint(1, 6),
                         check_in_time=time(14, 0),
                         check_out_time=time(11, 0),
                         parking=random.choice([True, False]),

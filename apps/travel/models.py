@@ -4,6 +4,7 @@ from apps.core.constants import Currency, UserRole
 from apps.users.models import Interest, CustomUser
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericForeignKey
+from apps.booking.models import Booking
 
 class Itinerary(models.Model):
     itinerary_id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -24,6 +25,14 @@ class ItineraryItem(models.Model):
     scheduled_date = models.DateTimeField()
     estimated_cost = models.DecimalField(max_digits=12, decimal_places=2)
     estimated_cost_currency = models.CharField(max_length=3, choices=Currency.choices)
+
+    booking = models.ForeignKey(
+        Booking, 
+        on_delete=models.SET_NULL, # Permite que el plan sobreviva a la cancelación de la reserva. Se debe hacer un cambio de estado en la reserva
+        null=True, 
+        blank=True,
+        related_name="itinerary_items"
+    )
 
     def __str__(self):
         return f"{self.itinerary_id.name} - {self.content_type.model} - {self.scheduled_date}"

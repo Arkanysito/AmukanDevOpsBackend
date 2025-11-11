@@ -34,8 +34,8 @@ class ChoicesView(APIView):
         })
 
 # --- Configuración de Dashboards ---
-PUBLIC_DASHBOARD_ID = 3  # <-- ID del Dashboard para org públicas
-PRIVATE_DASHBOARD_ID = 4 # <-- ID del Dashboard para cualquier otra org"
+PUBLIC_DASHBOARD_ID = 4  # <-- ID del Dashboard para org públicas
+PRIVATE_DASHBOARD_ID = 3 # <-- ID del Dashboard para cualquier otra org"
 
 METABASE_PARAM_NAME = "org_id" # Hay que crear un filtro con este mismo nombre
 
@@ -63,7 +63,9 @@ def get_org_dashboard_embed_url(request):
     if org_category == OrganizationCategory.GOVERNMENT: 
         # Es GOBIERNO: usa el dashboard público, sin parámetros
         dashboard_id_to_use = PUBLIC_DASHBOARD_ID
-        locked_params = {} 
+        locked_params = {
+            METABASE_PARAM_NAME: org_uuid_str
+        } 
     
     else:
         dashboard_id_to_use = PRIVATE_DASHBOARD_ID

@@ -9,6 +9,8 @@ from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 import json
 import logging 
+from django.utils import timezone
+from datetime import datetime
 
 from apps.organizations.models import Organization, OrganizationUser
 from apps.location.models import Place
@@ -31,7 +33,7 @@ TYPE_FIELDS = {
         "accommodation_type",
         "amenities",
         "beds",
-        "room_capacity",
+        "capacity",
         "check_in_time",
         "check_out_time",
         "parking",
@@ -41,7 +43,7 @@ TYPE_FIELDS = {
 }
 
 REQUIRED_BY_TYPE = {
-    "accommodation": {"accommodation_type", "beds", "room_capacity", "check_in_time", "check_out_time"},
+    "accommodation": {"accommodation_type", "beds", "capacity", "check_in_time", "check_out_time"},
     "transport": {"transport_type"},
     "activity": {"activity_type", "duration_minutes"},
 }
@@ -76,7 +78,7 @@ def get_user_services(request):
                 "description": acc.description, "price": float(acc.price) if acc.price else None,
                 "price_currency": acc.price_currency, "rating": float(acc.rating) if acc.rating else None,
                 "accommodation_type": acc.accommodation_type, "beds": acc.beds,
-                "room_capacity": acc.room_capacity,
+                "capacity": acc.capacity,
                 "check_in_time": str(acc.check_in_time) if acc.check_in_time else None,
                 "check_out_time": str(acc.check_out_time) if acc.check_out_time else None,
                 "details": acc.details,
@@ -141,7 +143,7 @@ def get_service_detail(request, service_type: str, service_id: str):
     if tipo == "accommodation":
         response_data.update({
             "accommodation_type": service.accommodation_type, "amenities": service.amenities,
-            "beds": service.beds, "room_capacity": service.room_capacity,
+            "beds": service.beds, "capacity": service.capacity,
             "check_in_time": str(service.check_in_time) if service.check_in_time else None,
             "check_out_time": str(service.check_out_time) if service.check_out_time else None,
             "parking": service.parking,
@@ -428,8 +430,7 @@ EVENT_REQUIRED = {"name", "start_date", "end_date", "price", "price_currency"}
 @permission_classes([IsAuthenticated])
 def list_events(request):
     """
-    Obtener todos los eventos de la organización a la que pertenece el usuario
-    (sin filtros adicionales, siguiendo el patrón de services).
+    Obtener todos los eventos FUTUROS de la organización a la que pertenece el usuario
     """
     try:
         organization_user_relation = OrganizationUser.objects.filter(user_id=request.user).first()
@@ -441,8 +442,14 @@ def list_events(request):
             )
         organization = organization_user_relation.organization_id
         
-        events_queryset = Event.objects.filter(organization_id=organization).select_related('cover_image')
-        print(f"Eventos encontrados: {events_queryset.count()}")
+        # Filtrar solo eventos futuros (end_date >= hoy)
+        now = timezone.now()
+        events_queryset = Event.objects.filter(
+            organization_id=organization,
+            end_date__gte=now  # Solo eventos que no han terminado
+        ).select_related('cover_image')
+        
+        print(f"Eventos futuros encontrados: {events_queryset.count()}")
 
         events_payload = []
         for event_instance in events_queryset:

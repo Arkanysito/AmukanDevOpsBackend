@@ -30,7 +30,7 @@ class AccommodationListView(APIView):
             querys = querys.filter(average_price__lte=budget)
         
         # if travelers:
-        #    querys = querys.filter(room_capacity__gte=travelers)
+        #    querys = querys.filter(capacity__gte=travelers)
 
         if ordering == "price_asc":
             querys = querys.order_by("average_price")

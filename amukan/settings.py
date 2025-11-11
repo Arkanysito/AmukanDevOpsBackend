@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'apps.tracking',
     'apps.destinationSearch',
     'apps.recommendation',
+    'apps.booking',
     'rest_framework',
     'corsheaders',
 ]

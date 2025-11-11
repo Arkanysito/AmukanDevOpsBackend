@@ -4,6 +4,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.http import JsonResponse
 from .services import recommend_places
+from django.utils import timezone
+from datetime import datetime
 
 from .serializers import (
     PlaceRecoSerializer, 
@@ -85,9 +87,18 @@ def recommend_services_view(request):
         # 2. Elegir el Serializer CORRECTO del map
         SerializerClass = SERIALIZER_MAP[service_type]
         
-        # 3. Serializar los datos
+        # 3. Filtrar eventos pasados si el tipo es 'event'
         data = []
+        now = timezone.now()
+        
         for service_object, score in recommendations:
+            # Para eventos, filtrar los que ya pasaron
+            if service_type == 'event':
+                # Verificar si el evento ya terminó
+                if hasattr(service_object, 'end_date') and service_object.end_date:
+                    if service_object.end_date < now:
+                        continue  # Saltar eventos pasados
+            
             # Pasa el 'score' al serializer a través del contexto
             serializer = SerializerClass(service_object, context={'score': score})
             data.append(serializer.data)

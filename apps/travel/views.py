@@ -321,7 +321,8 @@ class ItineraryPreviewView(APIView):
         if service is None:
             # Servicio genérico (fallback)
             formatted_service = {
-                "nombre": item.get('description', 'Servicio'), # Usar description si existe
+                "id": "", # ID vacío para servicios genéricos
+                "nombre": item.get('description', 'Servicio'),
                 "descripcion": item.get('description', 'Servicio incluido en el itinerario'),
                 "rating": 0.0,
                 "fecha": item['date'].isoformat() if 'date' in item and item['date'] else None,
@@ -333,23 +334,37 @@ class ItineraryPreviewView(APIView):
             }
         else:
             # Servicio de la base de datos
-            # ID: 'service_id' (ActivityService, Accomm...) o 'place_id' (Place) o 'event_id'
-            service_id_val = getattr(service, 'service_id', None)
-            place_id_val = getattr(service, 'place_id', None)
-            event_id_val = getattr(service, 'event_id', None)
-            # Determinar el ID primario según el tipo inferido o real
-            if isinstance(service, ActivityService) or isinstance(service, AccommodationService):
-                 service_id = service_id_val
+            current_backend_type = item.get('type') # El tipo del generador
+
+            # Determinar el ID primario Y el tipo_backend_real según la instancia
+            if isinstance(service, AccommodationService):
+                service_id = getattr(service, 'service_id', None)
+                backend_type_real = 'accommodation'
+            elif isinstance(service, ActivityService):
+                service_id = getattr(service, 'service_id', None)
+                backend_type_real = 'activity'
             elif isinstance(service, Place):
-                 service_id = place_id_val
+                service_id = getattr(service, 'place_id', None)
+                # Mapear 'accommodation' o 'activity' (del generador) a 'place_activity'
+                if current_backend_type in ['dining', 'place_activity']:
+                    backend_type_real = current_backend_type
+                else:
+                    # Si el generador dijo 'accommodation' pero es un Place,
+                    # lo tratamos como 'place_activity'
+                    backend_type_real = 'place_activity'
             elif isinstance(service, Event):
-                 service_id = event_id_val
-            else: # Fallback si no podemos determinar el tipo exacto
-                 service_id = service_id_val or place_id_val or event_id_val or ''
+                service_id = getattr(service, 'event_id', None)
+                backend_type_real = 'event'
+            else:
+                # Fallback
+                service_id = getattr(service, 'service_id', None) or \
+                             getattr(service, 'place_id', None) or \
+                             getattr(service, 'event_id', None) or None
+                backend_type_real = current_backend_type
 
 
             formatted_service = {
-                "id": str(service_id),
+                "id": str(service_id) if service_id else '',
                 "nombre": getattr(service, 'name', 'Servicio'),
                 "descripcion": getattr(service, 'description', ''),
                 "rating": float(getattr(service, 'rating', 0.0)),
@@ -358,7 +373,7 @@ class ItineraryPreviewView(APIView):
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
                 "tipo_comida": item.get('meal_type'),
-                "backend_type": item.get('type')
+                "backend_type": backend_type_real
             }
 
         # Para eventos, agregar información específica
@@ -467,13 +482,16 @@ class SaveItineraryView(APIView):
                 )
 
                 # Procesar items del itinerario
-                # NOTA: Esta función necesita ser revisada para manejar la mezcla de tipos en 'actividades'
                 items_creados = self._create_itinerary_items(itinerary, data['itinerario_data'])
+                
+                # CREAR RESERVAS AUTOMÁTICAS PARA EVENTOS
+                reservas_creadas = self._create_automatic_bookings(user, items_creados, data['itinerario_data'])
+                logger.info(f"📅 Reservas automáticas creadas: {len(reservas_creadas)}")
 
                 # GUARDAR INTERACCIÓN DE GUARDADO DE ITINERARIO
                 self._save_itinerary_save_interaction(request, itinerary, data['itinerario_data'], items_creados)
 
-                # ACTUALIZAR PERFIL DEL USUARIO BASADO EN EL ITINERARIO (INCLUYENDO EXPERIENCIAS)
+                # ACTUALIZAR PERFIL DEL USUARIO BASADO EN EL ITINERARIO
                 self._update_user_profile_from_itinerary(user, data['itinerario_data'])
 
                 return Response({
@@ -481,15 +499,99 @@ class SaveItineraryView(APIView):
                     "itinerary_id": str(itinerary.itinerary_id),
                     "name": itinerary.name,
                     "items_count": len(items_creados),
+                    "bookings_created": len(reservas_creadas),
                     "items_by_type": {k: len(v) for k, v in data['itinerario_data'].get('servicios', {}).items()}
                 }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            logger.error(f"❌ Error al guardar itinerario: {str(e)}", exc_info=True) # Añadir exc_info
+            logger.error(f"❌ Error al guardar itinerario: {str(e)}", exc_info=True)
             return Response(
                 {"error": f"Error al guardar itinerario: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    def _create_automatic_bookings(self, user, itinerary_items, itinerario_data):
+        """
+        Crea reservas automáticas para eventos incluidos en el itinerario.
+        Si ya existe una reserva, suma la cantidad de personas.
+        """
+        from apps.booking.models import Booking
+        from django.contrib.contenttypes.models import ContentType
+        
+        reservas_creadas = []
+        # Esta es la cantidad de personas del paquete que se está guardando
+        cantidad_personas_paquete = itinerario_data.get('cantidad_personas', 1) 
+
+        for item in itinerary_items: # 'item' es una instancia de ItineraryItem
+            try:
+                # Solo crear reservas para eventos
+                if item.content_type.model == 'event':
+                    event = item.reservable # Este es el objeto Event
+                    
+                    if not event:
+                        logger.warning(f"⚠️ No se pudo obtener el evento para el item {item.item_id}")
+                        continue
+
+                    # --- 1. Obtener datos necesarios del Evento ---
+                    event_organization = getattr(event, 'organization_id', None) 
+                    event_price = getattr(event, 'price', 0) 
+                    event_currency = getattr(event, 'price_currency', 'CLP')
+
+                    if not event_organization:
+                        logger.error(f"❌ El evento {event.name} no tiene 'organization_id' (es None). No se puede crear reserva.")
+                        continue # No podemos crear una reserva sin organización
+
+                    # --- 2. Buscar si ya existe una reserva para ESE usuario y ESE evento ---
+                    existing_booking = Booking.objects.filter(
+                        user=user,
+                        content_type=item.content_type,
+                        object_id=item.object_id
+                    ).first()
+
+                    if existing_booking:
+                        # --- 3. SI EXISTE: Sumar personas y recalcular precio ---
+                        logger.info(f"ℹ️ Ya existe reserva para el evento {event.name}. Sumando {cantidad_personas_paquete} personas.")
+                        
+                        existing_booking.cantidad_personas += cantidad_personas_paquete
+                        # Recalcular el precio total con la nueva cantidad de personas
+                        existing_booking.total_price = (event_price or 0) * existing_booking.cantidad_personas
+                        
+                        existing_booking.save()
+                        
+                        # Le decimos al ItineraryItem cuál es su reserva
+                        item.booking = existing_booking
+                        item.save(update_fields=['booking']) # Guardamos solo este campo
+
+                        reservas_creadas.append(existing_booking)
+                    
+                    else:
+                        # --- 4. SI NO EXISTE: Crear una reserva nueva (con todos los campos) ---
+                        logger.info(f"✅ Creando NUEVA reserva para evento: {event.name}")
+                        
+                        booking = Booking.objects.create(
+                            user=user,
+                            organization=event_organization,
+                            content_type=item.content_type,
+                            object_id=item.object_id,
+                            cantidad_personas=cantidad_personas_paquete,
+                            start_date=event.start_date if hasattr(event, 'start_date') else item.scheduled_date,
+                            end_date=event.end_date if hasattr(event, 'end_date') else item.scheduled_date,
+                            # 'state' usará el default 'PENDIENTE' del modelo
+                            total_price=(event_price or 0) * cantidad_personas_paquete,
+                            price_currency=event_currency
+                        )
+                        
+                        # Le decimos al ItineraryItem cuál es su reserva
+                        item.booking = booking
+                        item.save(update_fields=['booking']) # Guardamos solo este campo
+
+                        reservas_creadas.append(booking)
+                    
+            except Exception as e:
+                logger.error(f"❌ Error creando reserva automática para item {item.item_id}: {str(e)}")
+                continue
+
+        return reservas_creadas
 
     def _get_session_id(self, request):
         """Obtiene el session_id de la request"""

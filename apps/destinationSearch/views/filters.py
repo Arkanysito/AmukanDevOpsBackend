@@ -18,7 +18,7 @@ def filter_accommodations(budget=None, travelers=None):
     if budget:
         querys = querys.filter(price__lte=budget)
     if travelers:
-        querys = querys.filter(room_capacity__gte=travelers)
+        querys = querys.filter(capacity__gte=travelers)
     return querys
 
 def filter_activities(budget=None):
