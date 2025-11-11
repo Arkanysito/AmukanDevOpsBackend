@@ -3,7 +3,6 @@
 # ============================================================================
 
 from django.core.management.base import BaseCommand
-from apps.recommendation.services import warmup_recommendation_system
 from apps.users.models import CustomUser
 from apps.location.models import Zone
 
@@ -40,9 +39,6 @@ class Command(BaseCommand):
             result = RecommendationCacheMonitor.clear_all_recommendation_caches()
             self.stdout.write(self.style.SUCCESS(f"Cache limpiado: {result}"))
         
-        # Warmup del modelo
-        warmup_recommendation_system()
-        self.stdout.write(self.style.SUCCESS("✓ Modelo de embeddings cargado"))
         
         # Obtener usuarios activos
         users = CustomUser.objects.filter(is_active=True)[:options['users']]

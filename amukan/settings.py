@@ -65,8 +65,15 @@ METABASE_PUBLIC_BASE_URL = METABASE_SITE_URL
 
 HF_API_TOKEN = os.environ.get("HF_API_TOKEN")
 
-DEBUG = os.getenv("DEBUG", "True") == "True"
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+# DEBUG desde variable de entorno (default False)
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
+
+# ALLOWED_HOSTS desde env: DJANGO_ALLOWED_HOSTS=ip,dominio,otro
+_raw_hosts = os.getenv("DJANGO_ALLOWED_HOSTS", "")
+ALLOWED_HOSTS = [h.strip() for h in _raw_hosts.split(",") if h.strip()]
+if not ALLOWED_HOSTS:
+    # fallback útil en dev/local
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -167,6 +174,8 @@ AUTHENTICATION_BACKENDS = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
+    "https://amukan.travel",
+    "https://www.amukan.travel",
 ]
 
 REST_FRAMEWORK = {
@@ -184,7 +193,7 @@ SIMPLE_JWT = {
 #Agregado para Metabase
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ["http://localhost:5173"]
+CSRF_TRUSTED_ORIGINS = ["http://localhost:5173","https://amukan.travel","https://www.amukan.travel",]
 
 LOGGING = {
     'version': 1,

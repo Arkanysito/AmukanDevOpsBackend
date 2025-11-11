@@ -8,7 +8,7 @@ from apps.core.views import upload_image
 from apps.organizations.views import login_view, get_user_profile
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('centraldeoperacionessecretasamukan/', admin.site.urls),
     path('api/destination/', include('apps.destinationSearch.urls')),
     path('api/user/', include('apps.users.urls')),
     path('api/travel/', include('apps.travel.urls')),

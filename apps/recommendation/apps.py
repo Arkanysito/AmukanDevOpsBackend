@@ -16,10 +16,4 @@ class RecommendationConfig(AppConfig):
         if 'runserver' not in sys.argv and 'gunicorn' not in sys.argv[0]:
             return
         
-        try:
-            from .services import warmup_recommendation_system
-            warmup_recommendation_system()
-        except Exception as e:
-            print(f"Warning: Could not warmup recommendation system: {e}")
-            # No fallar el startup si hay error
 
