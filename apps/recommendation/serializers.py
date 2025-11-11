@@ -7,8 +7,6 @@ from apps.core.s3_utils import build_public_url
 
 def get_cover_image_url(self, obj):
     """Calcula y devuelve la URL pública de la imagen de portada."""
-    # Se asume que obj.cover_image es un objeto con bucket y object_key,
-    # o es None si no hay imagen.
     if obj.cover_image:
         return build_public_url(obj.cover_image.bucket, obj.cover_image.object_key)
     return None
@@ -20,6 +18,8 @@ class PlaceRecoSerializer(serializers.ModelSerializer):
     average_price = serializers.SerializerMethodField()
     place_id = serializers.CharField(source='pk') 
     cover_image_url = serializers.SerializerMethodField()
+    organization_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = Place
         fields = [
@@ -33,6 +33,7 @@ class PlaceRecoSerializer(serializers.ModelSerializer):
             "coordinates",
             "average_price",
             'cover_image_url',
+            'organization_name',
         ]
     
     get_cover_image_url = get_cover_image_url
@@ -49,6 +50,9 @@ class PlaceRecoSerializer(serializers.ModelSerializer):
     def get_average_price(self, obj):
         return obj.average_price
 
+    def get_organization_name(self, obj):
+        return obj.organization_id.name if obj.organization_id else None
+
 
 class ActivityServiceRecoSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
@@ -57,6 +61,8 @@ class ActivityServiceRecoSerializer(serializers.ModelSerializer):
     description = serializers.CharField(source='place_id.description', read_only=True)
     coordinates = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
+    organization_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = ActivityService
         fields = [
@@ -68,6 +74,7 @@ class ActivityServiceRecoSerializer(serializers.ModelSerializer):
             "coordinates",
             "score",
             'cover_image_url',
+            'organization_name',
         ]
 
     get_cover_image_url = get_cover_image_url
@@ -80,6 +87,10 @@ class ActivityServiceRecoSerializer(serializers.ModelSerializer):
             return obj.place_id.coordinates.wkt
         return None
 
+    def get_organization_name(self, obj):
+        return obj.organization_id.name if obj.organization_id else None
+
+
 class EventRecoSerializer(serializers.ModelSerializer):
     score = serializers.SerializerMethodField()
     event_id = serializers.CharField(source='pk')
@@ -87,6 +98,7 @@ class EventRecoSerializer(serializers.ModelSerializer):
     cover_image_url = serializers.SerializerMethodField()
     name = serializers.CharField(read_only=True)
     description = serializers.CharField(read_only=True)
+    organization_name = serializers.SerializerMethodField()
     
     class Meta:
         model = Event
@@ -101,6 +113,7 @@ class EventRecoSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             'cover_image_url',
+            'organization_name',
         ]
 
     get_cover_image_url = get_cover_image_url    
@@ -112,3 +125,6 @@ class EventRecoSerializer(serializers.ModelSerializer):
         if obj.place_id and obj.place_id.coordinates:
             return obj.place_id.coordinates.wkt
         return None
+
+    def get_organization_name(self, obj):
+        return obj.organization_id.name if obj.organization_id else None

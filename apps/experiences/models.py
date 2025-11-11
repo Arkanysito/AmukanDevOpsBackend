@@ -17,6 +17,7 @@ class AbstractService(models.Model):
     details = models.JSONField(blank=True, null=True)
     policies = models.JSONField(blank=True, null=True)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
+    capacity = models.PositiveIntegerField(default=1)
     embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True) 
     cover_image = models.ForeignKey(
         "core.Image",
@@ -73,7 +74,6 @@ class AccommodationService(AbstractService):
     accommodation_type = models.CharField(max_length=15, choices=AccommodationType.choices)
     amenities = models.JSONField(blank=True, null=True)
     beds = models.IntegerField()
-    room_capacity = models.IntegerField()
     check_in_time = models.TimeField()
     check_out_time = models.TimeField()
     parking = models.BooleanField(default=False)
@@ -98,6 +98,7 @@ class Event(models.Model):
     is_featured = models.BooleanField(default=False)
     rating = models.DecimalField(max_digits=2, decimal_places=1, default=0)
     embedding = ArrayField(models.FloatField(), size=384, null=True, blank=True)
+    capacity = models.PositiveIntegerField(default=50) # número total de entradas/tickets para el evento.
     cover_image = models.ForeignKey(
         "core.Image",
         null=True, blank=True,

@@ -65,7 +65,7 @@ class Command(BaseCommand):
                 accommodation_type=random.choice([a[0] for a in AccommodationType.choices]),
                 amenities={"wifi": True, "desayuno": True},
                 beds=random.randint(1, 4),
-                room_capacity=random.randint(1, 6),
+                capacity=random.randint(1, 6),
                 check_in_time=time(14, 0),
                 check_out_time=time(11, 0),
                 parking=random.choice([True, False]),
