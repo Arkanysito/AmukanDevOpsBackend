@@ -321,7 +321,8 @@ class ItineraryPreviewView(APIView):
         if service is None:
             # Servicio genérico (fallback)
             formatted_service = {
-                "nombre": item.get('description', 'Servicio'), # Usar description si existe
+                "id": "", # ID vacío para servicios genéricos
+                "nombre": item.get('description', 'Servicio'),
                 "descripcion": item.get('description', 'Servicio incluido en el itinerario'),
                 "rating": 0.0,
                 "fecha": item['date'].isoformat() if 'date' in item and item['date'] else None,
@@ -333,23 +334,37 @@ class ItineraryPreviewView(APIView):
             }
         else:
             # Servicio de la base de datos
-            # ID: 'service_id' (ActivityService, Accomm...) o 'place_id' (Place) o 'event_id'
-            service_id_val = getattr(service, 'service_id', None)
-            place_id_val = getattr(service, 'place_id', None)
-            event_id_val = getattr(service, 'event_id', None)
-            # Determinar el ID primario según el tipo inferido o real
-            if isinstance(service, ActivityService) or isinstance(service, AccommodationService):
-                 service_id = service_id_val
+            current_backend_type = item.get('type') # El tipo del generador
+
+            # Determinar el ID primario Y el tipo_backend_real según la instancia
+            if isinstance(service, AccommodationService):
+                service_id = getattr(service, 'service_id', None)
+                backend_type_real = 'accommodation'
+            elif isinstance(service, ActivityService):
+                service_id = getattr(service, 'service_id', None)
+                backend_type_real = 'activity'
             elif isinstance(service, Place):
-                 service_id = place_id_val
+                service_id = getattr(service, 'place_id', None)
+                # Mapear 'accommodation' o 'activity' (del generador) a 'place_activity'
+                if current_backend_type in ['dining', 'place_activity']:
+                    backend_type_real = current_backend_type
+                else:
+                    # Si el generador dijo 'accommodation' pero es un Place,
+                    # lo tratamos como 'place_activity'
+                    backend_type_real = 'place_activity'
             elif isinstance(service, Event):
-                 service_id = event_id_val
-            else: # Fallback si no podemos determinar el tipo exacto
-                 service_id = service_id_val or place_id_val or event_id_val or ''
+                service_id = getattr(service, 'event_id', None)
+                backend_type_real = 'event'
+            else:
+                # Fallback
+                service_id = getattr(service, 'service_id', None) or \
+                             getattr(service, 'place_id', None) or \
+                             getattr(service, 'event_id', None) or None
+                backend_type_real = current_backend_type
 
 
             formatted_service = {
-                "id": str(service_id),
+                "id": str(service_id) if service_id else '',
                 "nombre": getattr(service, 'name', 'Servicio'),
                 "descripcion": getattr(service, 'description', ''),
                 "rating": float(getattr(service, 'rating', 0.0)),
@@ -358,7 +373,7 @@ class ItineraryPreviewView(APIView):
                 "coordenadas": self._get_coordinates(service),
                 "duracion": item.get('duration_hours'),
                 "tipo_comida": item.get('meal_type'),
-                "backend_type": item.get('type')
+                "backend_type": backend_type_real
             }
 
         # Para eventos, agregar información específica
