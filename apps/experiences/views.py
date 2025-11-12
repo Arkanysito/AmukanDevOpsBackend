@@ -442,12 +442,10 @@ def list_events(request):
             )
         organization = organization_user_relation.organization_id
         
-        # Filtrar solo eventos futuros (end_date >= hoy)
-        now = timezone.now()
+        # Obtener TODOS los eventos de la organización
         events_queryset = Event.objects.filter(
-            organization_id=organization,
-            end_date__gte=now  # Solo eventos que no han terminado
-        ).select_related('cover_image')
+            organization_id=organization
+        ).select_related('cover_image').order_by('-start_date') # Ordena por fecha más reciente
         
         print(f"Eventos futuros encontrados: {events_queryset.count()}")
 
