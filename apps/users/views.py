@@ -28,6 +28,7 @@ from apps.tracking.models import Interaction
 from apps.core.constants import InteractionAction
 from .tasks import run_profile_analysis_task, clear_user_vector_cache_task
 import logging
+from apps.core.s3_utils import build_public_url
 
 logger = logging.getLogger(__name__) # Configurar logger
 
@@ -349,17 +350,26 @@ def list_user_favorites(request):
             if target_obj:
                 target_display = getattr(target_obj, "name", None) or getattr(target_obj, "title", None) or str(target_obj)
 
-                # Detalles específicos
-                model_type_name = favorite.content_type.model # Nombre del modelo real
-                target_details['model_type'] = model_type_name # Siempre incluir el tipo real
+                model_type_name = favorite.content_type.model
+                target_details['model_type'] = model_type_name
 
+                # Imagen representativa (replica de get_cover_image_url)
+                if hasattr(target_obj, "cover_image") and target_obj.cover_image:
+                    try:
+                        target_details["cover_image_url"] = build_public_url(
+                            target_obj.cover_image.bucket,
+                            target_obj.cover_image.object_key
+                        )
+                    except Exception as e:
+                        logger.warning(f"No se pudo construir cover_image_url para favorito {favorite.user_fav_id}: {e}")
+
+                # Otros detalles específicos
                 if isinstance(target_obj, Place):
-                     target_details['place_type'] = getattr(target_obj, 'type', None)
+                    target_details['place_type'] = getattr(target_obj, 'type', None)
                 elif isinstance(target_obj, ActivityService):
-                     target_details['activity_duration'] = getattr(target_obj, 'duration_minutes', None)
+                    target_details['activity_duration'] = getattr(target_obj, 'duration_minutes', None)
                 elif isinstance(target_obj, Event):
-                     target_details['event_start_date'] = getattr(target_obj, 'start_date', None)
-                # Añadir más tipos si es necesario
+                    target_details['event_start_date'] = getattr(target_obj, 'start_date', None)
 
 
             payload.append({
