@@ -13,7 +13,7 @@ import datetime
 from django.core.cache import cache
 from apps.location.models import Place, Zone
 from apps.organizations.models import Organization
-from apps.core.constants import PlaceType, ZoneLevel
+from apps.core.constants import PlaceType, ZoneLevel, OrganizationCategory
 from apps.core.models import Image
 
 import boto3
@@ -572,6 +572,32 @@ class Command(BaseCommand):
             return # La función get_s3_client ya imprimió el error
         
         self.stdout.write(f"Conectado a S3 (MinIO). Usando bucket: {self.TARGET_BUCKET}")
+        self.stdout.write("🔧 Obteniendo/creando organización por defecto 'Amukan'...")
+        
+        try:
+            # Asegúrate que 'OrganizationCategory.OTHER' exista en tus constantes
+            default_category = OrganizationCategory.OTHER 
+            
+        except AttributeError:
+            self.stdout.write(self.style.ERROR("❌ Error: 'OrganizationCategory.OTHER' no existe en 'apps.core.constants'."))
+            self.stdout.write(self.style.ERROR("   Por favor, edita 'import_pois_vina.py' y elige una categoría válida para 'default_category'."))
+            return # Detener el script
+
+        try:
+            amukan_org, created = Organization.objects.get_or_create(
+                name="Amukan",
+                defaults={
+                    'category': default_category,
+                    'email': 'amukanchile.oficial@amukan.cl'
+                }
+            )
+            if created:
+                self.stdout.write(self.style.SUCCESS("✅ Organización 'Amukan' creada por defecto."))
+            else:
+                self.stdout.write(self.style.SUCCESS("✅ Organización 'Amukan' encontrada."))
+        except Exception as e:
+            self.stdout.write(self.style.ERROR(f"❌ Error fatal al crear/obtener 'Amukan': {e}"))
+            return # Detener el script si no se puede crear la org
         
         
         # Buscar comuna
@@ -708,7 +734,7 @@ class Command(BaseCommand):
                     
                     # 4. Crear el registro en la BD Image con los metadatos correctos
                     cover_image_obj = Image.objects.create(
-                        organization_id=None, # Asignamos None
+                        organization_id=amukan_org,
                         object_key=s3_object_key,
                         bucket=self.TARGET_BUCKET, 
                         storage="s3", # Como en tu modelo
@@ -733,7 +759,7 @@ class Command(BaseCommand):
                 place_data = {
                     'name': name,
                     'coordinates': point,
-                    'organization_id': None,
+                    'organization_id': amukan_org,
                     'zone_id': comuna,
                     'type': place_type,
                     'description': description,
