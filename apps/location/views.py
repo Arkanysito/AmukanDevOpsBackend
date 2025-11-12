@@ -14,6 +14,7 @@ from apps.location.models import Place, Zone
 
 from apps.core.models import Image
 from apps.core.s3_utils import build_public_url, s3_client
+from django.db.models import Prefetch
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,11 @@ def list_places(request):
         
         organization = organization_user.organization_id
         
-        places = Place.objects.filter(organization_id=organization).select_related("cover_image")
+        places = Place.objects.filter(organization_id=organization).select_related("cover_image", "zone_id")
         
+        # Obtenemos el ID de la organización UNA SOLA VEZ
+        org_id_str = str(organization.organization_id)
+
         response_data = []
         for place in places:
             response_data.append({
@@ -86,7 +90,7 @@ def list_places(request):
                 "average_price": float(place.average_price) if place.average_price is not None else None,
                 "schedule": place.schedule,
                 "rating": float(place.rating) if place.rating is not None else None,
-                "organization_id": str(place.organization_id.organization_id) if place.organization_id else None,
+                "organization_id": org_id_str, 
                 "zone_id": str(place.zone_id.zone_id) if place.zone_id else None,
                 "cover_image_url": (
                     build_public_url(place.cover_image.bucket, place.cover_image.object_key)
