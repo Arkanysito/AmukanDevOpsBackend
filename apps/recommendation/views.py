@@ -81,7 +81,7 @@ def recommend_services_view(request):
             user=request.user, 
             service_type=service_type, 
             zone=zone, 
-            top_k=100
+            top_k=20
         )
         
         # 2. Elegir el Serializer CORRECTO del map
