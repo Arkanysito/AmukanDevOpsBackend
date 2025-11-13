@@ -11,6 +11,7 @@ static_collected/
 # Virtual Environment
 .env
 .prod.env
+.env.prod
 venv/
 env/
 
