@@ -44,5 +44,5 @@ class AccommodationListView(APIView):
         else:
             # Orden por defecto si no es por precio
             querys = querys.order_by("-rating") 
-
+        querys = querys[:20]
         return standard_response(querys, PlaceAccommodationSerializer, "alojamientos")

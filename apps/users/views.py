@@ -1,6 +1,8 @@
 # apps/users/views.py
 
 from uuid import UUID
+from django.db.models import Prefetch, prefetch_related_objects
+from collections import defaultdict
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.db import transaction, IntegrityError, models
@@ -312,48 +314,55 @@ def find_content_type_for_activity_or_place(target_id_uuid: UUID):
 @permission_classes([IsAuthenticated])
 def list_user_favorites(request):
     try:
+        # 1. Consulta base (SIN el prefetch que fallaba)
         favorites_qs = UserFavorite.objects.filter(user_id=request.user).select_related("content_type")
 
         target_type_str = request.query_params.get("target_type")
         if target_type_str:
             try:
-                # Si piden 'activity', filtrar por IDs de ContentType
                 if target_type_str.lower() == 'activity':
-                    try:
-                        activity_ct_id = ContentType.objects.get_for_model(ActivityService).id
-                        place_ct_id = ContentType.objects.get_for_model(Place).id
-                        # Usar filtro __in con los IDs
-                        favorites_qs = favorites_qs.filter(content_type_id__in=[activity_ct_id, place_ct_id])
-                    except ContentType.DoesNotExist:
-                         logger.error("No se pudo encontrar ContentType para ActivityService o Place al listar favoritos.")
-                         # Devolver lista vacía o error, según prefieras
-                         return Response({"detail": "Error interno al buscar tipos de contenido."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+                    activity_ct_id = ContentType.objects.get_for_model(ActivityService).id
+                    place_ct_id = ContentType.objects.get_for_model(Place).id
+                    favorites_qs = favorites_qs.filter(content_type_id__in=[activity_ct_id, place_ct_id])
                 else:
-                    # Para otros tipos, usar la lógica original
                     content_type = resolve_content_type_for_target_type(target_type_str)
                     favorites_qs = favorites_qs.filter(content_type=content_type)
             except Exception as exc:
                 logger.error(f"Error resolviendo ContentType para '{target_type_str}': {exc}")
                 return Response({"detail": f"Tipo de objetivo inválido: {target_type_str}"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 3. Paso 1: Prefetch simple del GenericForeignKey 'target'
+        favorites_qs = favorites_qs.prefetch_related('target')
+        
+        # 4. Ejecutar la consulta (convertir a lista)
+        favorites_list = list(favorites_qs)
 
+        # 5. Agrupar los 'targets' por su tipo (Modelo)
+        targets_by_type = defaultdict(list)
+        for favorite in favorites_list:
+            if favorite.target: # 'target' fue prefetched
+                targets_by_type[favorite.target.__class__].append(favorite.target)
+
+        # 6. Paso 2: Prefetch ANIDADO manual para 'cover_image'
+        # Esto es muy eficiente: hará una consulta por CADA TIPO de modelo, 
+        # (ej. 1 para Place, 1 para Event), no por cada item.
+        for model_class, targets in targets_by_type.items():
+            if hasattr(model_class, 'cover_image'):
+                prefetch_related_objects(targets, 'cover_image')
 
         payload = []
-        # Optimización: prefetch_related para el GenericForeignKey 'target'
-        favorites_qs = favorites_qs.prefetch_related('target')
-
-        for favorite in favorites_qs:
-            target_display = "Objeto no disponible" # Default
+        
+        # 7. Este bucle ahora es 100% rápido
+        for favorite in favorites_list: # Usamos la lista ya cargada
+            target_display = "Objeto no disponible"
             target_details = {}
             target_obj = favorite.target # Acceder al objeto prefetched
 
             if target_obj:
                 target_display = getattr(target_obj, "name", None) or getattr(target_obj, "title", None) or str(target_obj)
-
                 model_type_name = favorite.content_type.model
                 target_details['model_type'] = model_type_name
 
-                # Imagen representativa (replica de get_cover_image_url)
                 if hasattr(target_obj, "cover_image") and target_obj.cover_image:
                     try:
                         target_details["cover_image_url"] = build_public_url(
@@ -371,10 +380,8 @@ def list_user_favorites(request):
                 elif isinstance(target_obj, Event):
                     target_details['event_start_date'] = getattr(target_obj, 'start_date', None)
 
-
             payload.append({
                 "user_fav_id": str(favorite.user_fav_id),
-                # Devolver el tipo real del objeto encontrado
                 "target_type": f"{favorite.content_type.app_label}.{favorite.content_type.model}",
                 "target_id": str(favorite.object_id),
                 "target_display_label": target_display,
@@ -383,6 +390,12 @@ def list_user_favorites(request):
 
         return Response(payload)
 
+    except ValueError as ve: # Captura el error específico que tuviste
+        logger.error(f"Error de ValueError en list_user_favorites (probable N+1): {str(ve)}", exc_info=True)
+        return Response(
+            {"detail": f"Error de configuración del servidor al pre-cargar datos: {ve}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
     except Exception as e:
         logger.error(f"Error en list_user_favorites: {str(e)}", exc_info=True)
         return Response(

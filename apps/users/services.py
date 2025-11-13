@@ -11,6 +11,7 @@ from apps.core.constants import InteractionAction
 # Importa los modelos de tus otras apps para que 'isinstance' funcione
 from apps.experiences.models import ActivityService, Event, AccommodationService
 from apps.location.models import Place
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,13 @@ class UserProfileAnalyzer:
             # 2. Obtener el estado "estable" de los favoritos actuales
             current_favorites = UserFavorite.objects.filter(
                 user_id=self.user
-            ).select_related('content_type') # Optimización
+            ).select_related('content_type').prefetch_related('target')
             
             # 3. Actualizar intereses
             self._update_interests_from_data(
                 search_interactions, 
                 save_interactions,
-                current_favorites  # <-- Pasamos la lista de favoritos
+                current_favorites
             )
             
             logger.info(f"✅ Perfil analizado para {self.user.email}")
@@ -112,32 +113,77 @@ class UserProfileAnalyzer:
             except Exception as e:
                 logger.warning(f"No se pudo procesar el favorito {fav.object_id} para {self.user.email}: {e}")
 
-    # --- Métodos Helper (Tus funciones originales) ---
-
+    @transaction.atomic
     def _apply_interest_updates(self, interest_weights):
-        """Aplica las actualizaciones de intereses a la base de datos"""
+        """
+        Aplica las actualizaciones de intereses a la base de datos
+        usando operaciones BULK para evitar N+1.
+        """
         if not interest_weights:
             return # No hay nada que actualizar
 
-        for interest_name, weight_change in interest_weights.items():
-            interest, created = Interest.objects.get_or_create(name=interest_name)
-            
-            # Ensure weight_change is Decimal for consistency
-            decimal_weight_change = Decimal(str(weight_change))
-
-            user_interest, created = UserInterest.objects.get_or_create(
-                user_id=self.user,
-                interest_id=interest,
-                # Ensure the default is also Decimal and clamped
-                defaults={'weight': min(decimal_weight_change, Decimal('1.0'))} 
+        interest_names = list(interest_weights.keys())
+        
+        # 1. Obtener todos los Intereses que YA existen
+        existing_interests = Interest.objects.filter(name__in=interest_names)
+        interest_map = {interest.name: interest for interest in existing_interests}
+        
+        # 2. Crear los Intereses que NO existen
+        new_interest_names = [name for name in interest_names if name not in interest_map]
+        if new_interest_names:
+            new_interests = Interest.objects.bulk_create(
+                [Interest(name=name) for name in new_interest_names]
             )
+            # Actualizar el mapa con los nuevos intereses
+            for interest in new_interests:
+                interest_map[interest.name] = interest
+        
+        # 3. Obtener todos los UserInterest que YA existen para este usuario
+        existing_user_interests = UserInterest.objects.filter(
+            user_id=self.user,
+            interest_id__name__in=interest_names
+        )
+        user_interest_map = {ui.interest_id.name: ui for ui in existing_user_interests}
+        
+        # 4. Preparar listas de creación y actualización
+        interests_to_create = []
+        interests_to_update = []
+        
+        decay_factor = Decimal('0.95')
+        min_weight = Decimal('0.1')
+        max_weight = Decimal('1.0')
+
+        for interest_name, weight_change in interest_weights.items():
+            interest_obj = interest_map.get(interest_name)
+            if not interest_obj:
+                continue # No se pudo crear o encontrar
             
-            if not created:
-                # Actualizar peso existente (decay + boost)
-                current_weight = user_interest.weight * Decimal('0.95') # Use Decimal for decay
-                new_weight = min(current_weight + decimal_weight_change, Decimal('1.0')) # Clamp upper bound
-                user_interest.weight = max(new_weight, Decimal('0.1')) # Clamp lower bound
-                user_interest.save()
+            decimal_weight_change = Decimal(str(weight_change))
+            
+            if interest_name in user_interest_map:
+                user_interest = user_interest_map[interest_name]
+                current_weight = user_interest.weight * decay_factor
+                new_weight = min(current_weight + decimal_weight_change, max_weight)
+                user_interest.weight = max(new_weight, min_weight)
+                interests_to_update.append(user_interest)
+            else:
+                new_weight = min(decimal_weight_change, max_weight)
+                interests_to_create.append(
+                    UserInterest(
+                        user_id=self.user,
+                        interest_id=interest_obj,
+                        weight=max(new_weight, min_weight)
+                    )
+                )
+        
+        # 5. Ejecutar consultas BULK (solo 2 consultas)
+        if interests_to_create:
+            UserInterest.objects.bulk_create(interests_to_create)
+            logger.info(f"UserProfileAnalyzer: Creados {len(interests_to_create)} nuevos UserInterests para {self.user.email}")
+            
+        if interests_to_update:
+            UserInterest.objects.bulk_update(interests_to_update, ['weight'])
+            logger.info(f"UserProfileAnalyzer: Actualizados {len(interests_to_update)} UserInterests para {self.user.email}")
 
     def _extract_interests_from_experiencias(self, experiencias, interest_weights, weight=0.1):
         """Extrae intereses de las experiencias seleccionadas"""

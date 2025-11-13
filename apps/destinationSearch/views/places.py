@@ -36,5 +36,5 @@ class PlaceListView(APIView):
             querys = querys.order_by("-average_price")
         else:
             querys = querys.order_by("-rating")
-
+        querys = querys[:20]
         return standard_response(querys, PlaceSerializer, "places")

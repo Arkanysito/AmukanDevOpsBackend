@@ -512,86 +512,114 @@ class SaveItineraryView(APIView):
 
     def _create_automatic_bookings(self, user, itinerary_items, itinerario_data):
         """
-        Crea reservas automáticas para eventos incluidos en el itinerario.
-        Si ya existe una reserva, suma la cantidad de personas.
+        Crea o actualiza reservas automáticas para eventos en LOTE (BULK).
         """
         from apps.booking.models import Booking
-        from django.contrib.contenttypes.models import ContentType
         
-        reservas_creadas = []
-        # Esta es la cantidad de personas del paquete que se está guardando
-        cantidad_personas_paquete = itinerario_data.get('cantidad_personas', 1) 
+        reservas_afectadas = []
+        items_para_actualizar_booking = [] # Para actualizar ItineraryItem.booking
+        
+        # 1. Filtrar solo los items que son 'event'
+        event_content_type = None
+        try:
+            event_content_type = ContentType.objects.get(model='event', app_label='experiences')
+        except ContentType.DoesNotExist:
+            logger.error("❌ ContentType para 'event' no existe. No se crearán reservas.")
+            return []
 
-        for item in itinerary_items: # 'item' es una instancia de ItineraryItem
-            try:
-                # Solo crear reservas para eventos
-                if item.content_type.model == 'event':
-                    event = item.reservable # Este es el objeto Event
-                    
-                    if not event:
-                        logger.warning(f"⚠️ No se pudo obtener el evento para el item {item.item_id}")
-                        continue
+        event_items = [item for item in itinerary_items if item.content_type_id == event_content_type.id]
+        if not event_items:
+            logger.info("ℹ️ No hay eventos en el itinerario. No se crearán reservas.")
+            return []
 
-                    # --- 1. Obtener datos necesarios del Evento ---
-                    event_organization = getattr(event, 'organization_id', None) 
-                    event_price = getattr(event, 'price', 0) 
-                    event_currency = getattr(event, 'price_currency', 'CLP')
+        # 2. Obtener todos los IDs de los eventos y los objetos Event en sí
+        event_object_ids = [item.object_id for item in event_items]
+        eventos_map = {
+            e.event_id: e for e in Event.objects.filter(
+                event_id__in=event_object_ids
+            ).select_related('organization_id') # Optimización N+1
+        }
 
-                    if not event_organization:
-                        logger.error(f"❌ El evento {event.name} no tiene 'organization_id' (es None). No se puede crear reserva.")
-                        continue # No podemos crear una reserva sin organización
+        # 3. Obtener todas las reservas EXISTENTES para estos eventos y este usuario
+        existing_bookings_qs = Booking.objects.filter(
+            user=user,
+            content_type=event_content_type,
+            object_id__in=event_object_ids
+        )
+        existing_bookings_map = {b.object_id: b for b in existing_bookings_qs}
+        
+        cantidad_personas_paquete = itinerario_data.get('cantidad_personas', 1)
+        
+        bookings_to_create = []
+        bookings_to_update = []
 
-                    # --- 2. Buscar si ya existe una reserva para ESE usuario y ESE evento ---
-                    existing_booking = Booking.objects.filter(
-                        user=user,
-                        content_type=item.content_type,
-                        object_id=item.object_id
-                    ).first()
-
-                    if existing_booking:
-                        # --- 3. SI EXISTE: Sumar personas y recalcular precio ---
-                        logger.info(f"ℹ️ Ya existe reserva para el evento {event.name}. Sumando {cantidad_personas_paquete} personas.")
-                        
-                        existing_booking.cantidad_personas += cantidad_personas_paquete
-                        # Recalcular el precio total con la nueva cantidad de personas
-                        existing_booking.total_price = (event_price or 0) * existing_booking.cantidad_personas
-                        
-                        existing_booking.save()
-                        
-                        # Le decimos al ItineraryItem cuál es su reserva
-                        item.booking = existing_booking
-                        item.save(update_fields=['booking']) # Guardamos solo este campo
-
-                        reservas_creadas.append(existing_booking)
-                    
-                    else:
-                        # --- 4. SI NO EXISTE: Crear una reserva nueva (con todos los campos) ---
-                        logger.info(f"✅ Creando NUEVA reserva para evento: {event.name}")
-                        
-                        booking = Booking.objects.create(
-                            user=user,
-                            organization=event_organization,
-                            content_type=item.content_type,
-                            object_id=item.object_id,
-                            cantidad_personas=cantidad_personas_paquete,
-                            start_date=event.start_date if hasattr(event, 'start_date') else item.scheduled_date,
-                            end_date=event.end_date if hasattr(event, 'end_date') else item.scheduled_date,
-                            # 'state' usará el default 'PENDIENTE' del modelo
-                            total_price=(event_price or 0) * cantidad_personas_paquete,
-                            price_currency=event_currency
-                        )
-                        
-                        # Le decimos al ItineraryItem cuál es su reserva
-                        item.booking = booking
-                        item.save(update_fields=['booking']) # Guardamos solo este campo
-
-                        reservas_creadas.append(booking)
-                    
-            except Exception as e:
-                logger.error(f"❌ Error creando reserva automática para item {item.item_id}: {str(e)}")
+        # 4. Separar las que hay que crear de las que hay que actualizar
+        for item in event_items:
+            evento = eventos_map.get(item.object_id)
+            
+            if not evento:
+                logger.warning(f"⚠️ Evento (ID: {item.object_id}) no encontrado en la BD. Saltando reserva.")
                 continue
+            if not evento.organization_id:
+                logger.warning(f"❌ Evento {evento.name} no tiene organización. Saltando reserva.")
+                continue
+            
+            event_price = (evento.price or 0)
+            
+            if item.object_id in existing_bookings_map:
+                # --- Preparar para ACTUALIZAR (UPDATE) ---
+                booking = existing_bookings_map[item.object_id]
+                booking.cantidad_personas += cantidad_personas_paquete
+                booking.total_price = event_price * booking.cantidad_personas
+                bookings_to_update.append(booking)
+                item.booking = booking # Asignar la instancia
+                items_para_actualizar_booking.append(item)
+            else:
+                # --- Preparar para CREAR (CREATE) ---
+                booking = Booking(
+                    user=user,
+                    organization=evento.organization_id,
+                    content_type=item.content_type,
+                    object_id=item.object_id,
+                    cantidad_personas=cantidad_personas_paquete,
+                    start_date=evento.start_date,
+                    end_date=evento.end_date,
+                    total_price=event_price * cantidad_personas_paquete,
+                    price_currency=getattr(evento, 'price_currency', 'CLP')
+                )
+                bookings_to_create.append(booking)
+                # item.booking se asignará después de que se cree el booking (en el paso 6)
 
-        return reservas_creadas
+        # 5. Ejecutar operaciones en LOTE (BULK)
+        try:
+            if bookings_to_update:
+                Booking.objects.bulk_update(bookings_to_update, ['cantidad_personas', 'total_price'])
+                reservas_afectadas.extend(bookings_to_update)
+                logger.info(f"✅ Reservas actualizadas (bulk): {len(bookings_to_update)}")
+
+            if bookings_to_create:
+                created_bookings = Booking.objects.bulk_create(bookings_to_create)
+                reservas_afectadas.extend(created_bookings)
+                logger.info(f"✅ Reservas creadas (bulk): {len(created_bookings)}")
+                
+                # 6. Mapear items nuevos a sus bookings recién creados
+                created_bookings_map = {b.object_id: b for b in created_bookings}
+                for item in event_items:
+                    if not item.booking: # Si aún no tiene un booking asignado (es nuevo)
+                        booking = created_bookings_map.get(item.object_id)
+                        if booking:
+                            item.booking = booking
+                            items_para_actualizar_booking.append(item)
+
+            # 7. Actualizar TODOS los ItineraryItem con su FK de booking en LOTE
+            if items_para_actualizar_booking:
+                ItineraryItem.objects.bulk_update(items_para_actualizar_booking, ['booking'])
+                logger.info(f"✅ Items de itinerario actualizados con FK de booking (bulk): {len(items_para_actualizar_booking)}")
+
+        except Exception as e:
+            logger.error(f"❌ Error en operaciones bulk de reserva: {str(e)}", exc_info=True)
+
+        return reservas_afectadas
 
     def _get_session_id(self, request):
         """Obtiene el session_id de la request"""
@@ -901,112 +929,98 @@ class SaveItineraryView(APIView):
 
     def _create_itinerary_items(self, itinerary, itinerario_data):
         """
-        Crea los items del itinerario usando tus modelos reales.
-        Esta versión maneja tipos mixtos (Place, ActivityService)
-        leyendo la clave 'backend_type' de cada item.
+        Crea los items del itinerario usando operaciones BULK.
         """
-        items_creados = []
+        items_para_crear = []
         
-        # Mapeo maestro que traduce el 'backend_type' (del item) al modelo/ContentType correcto.
-        # Asegúrate que los 'app_label' (ej. 'experiences', 'location') sean correctos
         backend_type_to_model_config = {
-            'accommodation': {
-                'content_type_model': 'accommodationservice',
-                'model_class': AccommodationService,
-                'id_field': 'service_id',
-                'app_label': 'experiences'
-            },
-            'dining': {
-                'content_type_model': 'place',
-                'model_class': Place,
-                'id_field': 'place_id',
-                'app_label': 'location'
-            },
-            'activity': { # Este es ActivityService
-                'content_type_model': 'activityservice',
-                'model_class': ActivityService,
-                'id_field': 'service_id',
-                'app_label': 'experiences' 
-            },
-            'place_activity': { # Este es Place
-                'content_type_model': 'place',
-                'model_class': Place,
-                'id_field': 'place_id',
-                'app_label': 'location'
-            },
-            'event': {
-                'content_type_model': 'event',
-                'model_class': Event,
-                'id_field': 'event_id',
-                'app_label': 'experiences'
-            }
+            'accommodation': { 'content_type_model': 'accommodationservice', 'app_label': 'experiences' },
+            'dining': { 'content_type_model': 'place', 'app_label': 'location' },
+            'activity': { 'content_type_model': 'activityservice', 'app_label': 'experiences' },
+            'place_activity': { 'content_type_model': 'place', 'app_label': 'location' },
+            'event': { 'content_type_model': 'event', 'app_label': 'experiences' }
         }
+        
+        # --- 1. OBTENER TODOS LOS CONTENT TYPES DE UNA VEZ ---
+        app_labels = set(c['app_label'] for c in backend_type_to_model_config.values())
+        models = set(c['content_type_model'] for c in backend_type_to_model_config.values())
+        
+        content_types_qs = ContentType.objects.filter(
+            app_label__in=list(app_labels), 
+            model__in=list(models)
+        )
+        
+        # Crear un cache en memoria para acceso instantáneo
+        content_type_cache = {
+            f"{ct.app_label}:{ct.model}": ct for ct in content_types_qs
+        }
+        
+        if not content_type_cache:
+            logger.error("❌ No se pudo cargar ningún ContentType. Verifique 'backend_type_to_model_config'.")
+            return []
 
         servicios = itinerario_data.get('servicios', {})
 
-        # Iteramos sobre las categorías del frontend (ej. 'actividades', 'hospedaje')
+        # --- 2. PREPARAR LOS ITEMS (SIN CREARLOS) ---
         for servicio_tipo, items_servicio in servicios.items():
-            
             if not items_servicio:
                 continue
 
-            # Iteramos sobre cada item individual dentro de la categoría
             for idx, item_data in enumerate(items_servicio):
                 try:
-                    # 1. LEER EL TIPO DE BACKEND DESDE EL ITEM
                     backend_type = item_data.get('backend_type')
-                    
                     if not backend_type:
                         logger.warning(f"⚠️ Item {item_data.get('nombre')} no tiene 'backend_type'. Saltando.")
                         continue
 
-                    # 2. OBTENER LA CONFIGURACIÓN DEL MODELO BASADO EN EL 'backend_type'
                     service_config = backend_type_to_model_config.get(backend_type)
-
                     if not service_config:
-                        logger.warning(f"⚠️ Tipo de backend no mapeado al guardar: {backend_type} (para item {item_data.get('nombre')})")
+                        logger.warning(f"⚠️ Tipo de backend no mapeado al guardar: {backend_type}")
                         continue
                     
-                    # 3. OBTENER EL CONTENTTYPE CORRECTO
+                    # --- OBTENER CONTENT TYPE DESDE CACHE (INSTANTÁNEO) ---
+                    cache_key = f"{service_config['app_label']}:{service_config['content_type_model']}"
+                    content_type = content_type_cache.get(cache_key)
+                    
+                    if not content_type:
+                        logger.error(f"❌ ContentType no encontrado EN CACHE: {cache_key}")
+                        continue
+                    
+                    object_id_str = item_data.get('id')
                     try:
-                        content_type = ContentType.objects.get(
-                            app_label=service_config['app_label'], 
-                            model=service_config['content_type_model']
-                        )
-                    except ContentType.DoesNotExist:
-                        logger.error(f"❌ ContentType no encontrado al guardar: app='{service_config['app_label']}', model='{service_config['content_type_model']}'")
-                        continue
-                    except Exception as e:
-                         logger.error(f"❌ Error obteniendo ContentType para {service_config['content_type_model']}: {e}")
+                        object_id = uuid.UUID(str(object_id_str))
+                    except (ValueError, TypeError, AttributeError):
+                         logger.warning(f"⚠️ ID inválido o nulo para {item_data.get('nombre')}: '{object_id_str}'. Saltando.")
                          continue
-
-                    # 4. ENCONTRAR EL OBJECT_ID (tu función _find_service_object_id ya usa service_config)
-                    object_id = self._find_service_object_id(item_data, service_config)
-
-                    if not object_id:
-                        logger.warning(f"⚠️ No se pudo encontrar object_id para item al guardar: {item_data.get('nombre', 'Sin nombre')} (Modelo: {service_config['model_class'].__name__})")
-                        continue
-
-                    # 5. PREPARAR FECHA Y CREAR ITEM
+                    
                     scheduled_date = self._parse_date(item_data.get('fecha'))
 
-                    # Crear el itinerary item
-                    item = ItineraryItem.objects.create(
-                        itinerary_id=itinerary,
-                        content_type=content_type,
-                        object_id=object_id,
-                        scheduled_date=scheduled_date,
-                        estimated_cost=item_data.get('costo', 0),
-                        estimated_cost_currency='CLP' 
+                    # Añadir a la lista para bulk_create
+                    items_para_crear.append(
+                        ItineraryItem(
+                            itinerary_id=itinerary,
+                            content_type=content_type,
+                            object_id=object_id,
+                            scheduled_date=scheduled_date,
+                            estimated_cost=item_data.get('costo', 0),
+                            estimated_cost_currency='CLP' 
+                        )
                     )
 
-                    items_creados.append(item)
-
                 except Exception as e:
-                    logger.error(f"❌ Error guardando item {idx} de {servicio_tipo} (Nombre: {item_data.get('nombre')}): {str(e)}")
+                    logger.error(f"❌ Error procesando item {idx} de {servicio_tipo}: {str(e)}")
                     continue
-
-        logger.info(f"🎉 Total de items guardados: {len(items_creados)}")
+        
+        # --- 3. CREAR TODOS LOS ITEMS EN UNA SOLA CONSULTA ---
+        items_creados = []
+        if items_para_crear:
+            try:
+                # bulk_create devuelve los objetos creados (incluyendo sus nuevos PKs)
+                items_creados = ItineraryItem.objects.bulk_create(items_para_crear)
+                logger.info(f"🎉 Total de items guardados (bulk): {len(items_creados)}")
+            except Exception as e:
+                 logger.error(f"❌ Error en ItineraryItem.objects.bulk_create: {str(e)}", exc_info=True)
+        
         return items_creados
 
 

@@ -1,0 +1,63 @@
+services:
+  web:
+    image: amukan-backend-web:prod
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    #volumes:
+      #- .:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DEBUG: ${DEBUG}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      SECRET_KEY: ${SECRET_KEY}
+
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+      S3_REGION: ${S3_REGION}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_ENDPOINT_PUBLIC: ${S3_ENDPOINT_PUBLIC}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
+      UPLOAD_ALLOWED_CONTENT_TYPES: ${UPLOAD_ALLOWED_CONTENT_TYPES:-image/jpeg,image/png,image/webp}
+      
+      HF_API_TOKEN: ${HF_API_TOKEN}
+    networks:
+      - default
+    
+    command: >
+      sh -c "python manage.py migrate && 
+             gunicorn amukan.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis_cache
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - default
+
+
+volumes:
+  redis_data:
+
+networks:
+  default:
+    driver: bridge
+    enable_ipv6: false
