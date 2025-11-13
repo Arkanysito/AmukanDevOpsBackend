@@ -1,8 +1,15 @@
+# /app/apps/destinationSearch/filters.py
 from apps.experiences.models import Event, AccommodationService, ActivityService
 from django.db.models import Q
 
 def filter_events(budget=None, start_date=None, end_date=None):
-    querys = Event.objects.all()
+    querys = Event.objects.select_related(
+        'place_id', 
+        'organization_id', 
+        'cover_image', 
+        'place_id__zone_id'
+    )
+    
     if budget:
         querys = querys.filter(price__lte=budget)
     if start_date and end_date:
@@ -14,7 +21,13 @@ def filter_events(budget=None, start_date=None, end_date=None):
     return querys
 
 def filter_accommodations(budget=None, travelers=None):
-    querys = AccommodationService.objects.all()
+    querys = AccommodationService.objects.select_related(
+        'place_id', 
+        'organization_id', 
+        'cover_image',
+        'place_id__zone_id'
+    )
+    
     if budget:
         querys = querys.filter(price__lte=budget)
     if travelers:
@@ -22,7 +35,13 @@ def filter_accommodations(budget=None, travelers=None):
     return querys
 
 def filter_activities(budget=None):
-    querys = ActivityService.objects.all()
+    querys = ActivityService.objects.select_related(
+        'place_id', 
+        'organization_id', 
+        'cover_image',
+        'place_id__zone_id'
+    )
+    
     if budget:
         querys = querys.filter(price__lte=budget)
     return querys

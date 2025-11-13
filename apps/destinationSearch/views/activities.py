@@ -28,7 +28,11 @@ class ActivityListView(APIView):
         
         interesting_types = [pt.value for pt in interesting_categories]
         
-        querys = Place.objects.filter(type__in=interesting_types)
+        querys = Place.objects.filter(type__in=interesting_types).select_related(
+            'organization_id', 
+            'zone_id', 
+            'cover_image'
+        )
         
         if budget:
             querys = querys.filter(average_price__lte=budget)

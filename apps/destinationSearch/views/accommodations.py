@@ -1,3 +1,4 @@
+# /app/apps/destinationSearch/views/accommodations.py
 from rest_framework.views import APIView
 from apps.experiences.models import AccommodationService
 from apps.location.models import Place
@@ -24,7 +25,11 @@ class AccommodationListView(APIView):
             PlaceType.CAMPSITE.value,
         ]
         
-        querys = Place.objects.filter(type__in=accommodation_types)
+        querys = Place.objects.filter(type__in=accommodation_types).select_related(
+            'organization_id', 
+            'zone_id', 
+            'cover_image'
+        )
         
         if budget:
             querys = querys.filter(average_price__lte=budget)

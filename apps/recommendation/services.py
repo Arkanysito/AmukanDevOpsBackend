@@ -131,19 +131,32 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
         ]
         interesting_types = [pt.value for pt in accommodation_types]
         
-        base_fields = ['place_id', 'embedding', 'rating', 'average_price']
+        base_fields = [
+            'place_id', 'embedding', 'rating', 'average_price', 
+            'description', 'coordinates', 'cover_image_id', 
+            'organization_id_id'
+        ] 
         queryset = Place.objects.exclude(embedding=None)\
             .filter(type__in=interesting_types)\
-            .only(*base_fields, 'zone_id', 'name', 'type')
+            .select_related('cover_image', 'organization_id') \
+            .only(*base_fields, 'zone_id', 'name', 'type', 
+                  'organization_id__name')
         
         if zone:
             queryset = queryset.filter(zone_id=zone)
             
     elif service_type == 'activity':
-        base_fields = ['service_id', 'embedding', 'rating', 'price']
+        base_fields = [
+            'service_id', 'embedding', 'rating', 'price', 'cover_image_id',
+            'organization_id_id'
+        ] 
         queryset = ActivityService.objects.exclude(embedding=None)\
-            .select_related('place_id')\
-            .only(*base_fields, 'place_id__zone_id', 'place_id__name', 'duration_minutes')
+            .select_related('place_id', 'cover_image', 'organization_id')\
+            .only(*base_fields, 
+                  'name', 'description', 'duration_minutes', 
+                  'place_id__zone_id', 'place_id__name', 
+                  'place_id__coordinates',
+                  'organization_id__name')
         
         if zone:
             queryset = queryset.filter(place_id__zone_id=zone)
@@ -151,11 +164,15 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
     elif service_type == 'event':
         base_fields = [
             'event_id', 'embedding', 'rating', 'price', 
-            'name', 'description'
+            'name', 'description', 'cover_image_id',
+            'organization_id_id'
         ]
         queryset = Event.objects.exclude(embedding=None)\
-            .select_related('place_id')\
-            .only(*base_fields, 'place_id__zone_id', 'start_date', 'end_date')
+            .select_related('place_id', 'cover_image', 'organization_id')\
+            .only(*base_fields, 
+                  'place_id__zone_id', 'start_date', 'end_date',
+                  'place_id__coordinates',
+                  'organization_id__name')
         
         if zone:
             queryset = queryset.filter(place_id__zone_id=zone)
@@ -166,10 +183,16 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
         ]
         interesting_types = [pt.value for pt in categories]
         
-        base_fields = ['place_id', 'embedding', 'rating']
+        base_fields = [
+            'place_id', 'embedding', 'rating', 
+            'description', 'coordinates', 'cover_image_id',
+            'organization_id_id'
+        ]
         queryset = Place.objects.exclude(embedding=None)\
             .filter(type__in=interesting_types)\
-            .only(*base_fields, 'zone_id', 'name', 'type')
+            .select_related('cover_image', 'organization_id') \
+            .only(*base_fields, 'zone_id', 'name', 'type',
+                  'organization_id__name')
         
         if zone:
             queryset = queryset.filter(zone_id=zone)
@@ -192,10 +215,16 @@ def get_optimized_services_queryset(service_type: str, zone: Zone = None):
         
         interesting_types = [pt.value for pt in interesting_categories]
         
-        base_fields = ['place_id', 'embedding', 'rating', 'average_price'] # Añadido average_price
+        base_fields = [
+            'place_id', 'embedding', 'rating', 'average_price',
+            'description', 'coordinates', 'cover_image_id',
+            'organization_id_id'
+        ] 
         queryset = Place.objects.exclude(embedding=None)\
             .filter(type__in=interesting_types)\
-            .only(*base_fields, 'zone_id', 'name', 'type')
+            .select_related('cover_image', 'organization_id') \
+            .only(*base_fields, 'zone_id', 'name', 'type',
+                  'organization_id__name')
         
         if zone:
             queryset = queryset.filter(zone_id=zone)
@@ -316,13 +345,12 @@ def recommend_places(user: CustomUser, service_type: str, zone: Zone = None,
         print(f"Error in recommend_places: {e}")
         # En caso de error, retornar servicios reales limitados sin fallback
         try:
-            services = get_optimized_services_queryset(service_type, zone)
+            services = get_fallback_services(service_type, zone, top_k)
             if services:
-                services_list = list(services[:top_k])
                 # Evitar duplicados incluso en el fallback
                 unique_services = []
                 processed_ids = set()
-                for service in services_list:
+                for service in services: # 'services' ya es una lista, no un queryset
                     service_key = get_service_key(service)
                     if service_key not in processed_ids:
                         unique_services.append((service, 0.5))
@@ -453,7 +481,10 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         interesting_types = [pt.value for pt in accommodation_types]
         
         services = Place.objects.filter(type__in=interesting_types)\
-            .only('place_id', 'rating', 'average_price', 'name', 'type', 'zone_id')
+            .select_related('cover_image', 'organization_id') \
+            .only('place_id', 'rating', 'average_price', 'name', 'type', 'zone_id',
+                  'description', 'coordinates', 'cover_image_id',
+                  'organization_id_id', 'organization_id__name')
         
         if zone:
             services = services.filter(zone_id=zone)
@@ -462,8 +493,11 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         
     elif service_type == 'activity':
         services = ActivityService.objects.all()\
-            .select_related('place_id')\
-            .only('service_id', 'rating', 'price', 'duration_minutes', 'place_id__name')
+            .select_related('place_id', 'cover_image', 'organization_id')\
+            .only('service_id', 'rating', 'price', 'duration_minutes', 
+                  'name', 'description', 'cover_image_id', 
+                  'place_id__name', 'place_id__coordinates',
+                  'organization_id_id', 'organization_id__name')
         
         if zone:
             services = services.filter(place_id__zone_id=zone)
@@ -472,8 +506,11 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         
     elif service_type == 'event':
         services = Event.objects.all()\
-            .select_related('place_id')\
-            .only('event_id', 'rating', 'price', 'start_date', 'end_date', 'place_id__name')
+            .select_related('place_id', 'cover_image', 'organization_id')\
+            .only('event_id', 'rating', 'price', 'start_date', 'end_date', 
+                  'name', 'description', 'cover_image_id', 
+                  'place_id__name', 'place_id__coordinates',
+                  'organization_id_id', 'organization_id__name')
         
         if zone:
             services = services.filter(place_id__zone_id=zone)
@@ -487,7 +524,10 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         interesting_types_values = [pt.value for pt in interesting_types]
         
         services = Place.objects.filter(type__in=interesting_types_values)\
-            .only('place_id', 'rating', 'name', 'type', 'zone_id')
+            .select_related('cover_image', 'organization_id') \
+            .only('place_id', 'rating', 'name', 'type', 'zone_id',
+                  'description', 'coordinates', 'cover_image_id',
+                  'organization_id_id', 'organization_id__name')
         
         if zone:
             services = services.filter(zone_id=zone)
@@ -511,7 +551,10 @@ def get_fallback_services(service_type: str, zone: Zone = None, top_k: int = 10)
         interesting_types = [pt.value for pt in interesting_categories]
         
         services = Place.objects.filter(type__in=interesting_types)\
-            .only('place_id', 'rating', 'name', 'type', 'zone_id', 'average_price')
+            .select_related('cover_image', 'organization_id') \
+            .only('place_id', 'rating', 'name', 'type', 'zone_id', 'average_price',
+                  'description', 'coordinates', 'cover_image_id',
+                  'organization_id_id', 'organization_id__name')
         
         if zone:
             services = services.filter(zone_id=zone)

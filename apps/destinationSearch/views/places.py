@@ -1,3 +1,4 @@
+# /app/apps/destinationSearch/views/places.py
 from rest_framework.views import APIView
 from apps.location.models import Place
 from apps.destinationSearch.serializers import PlaceSerializer
@@ -11,7 +12,11 @@ class PlaceListView(APIView):
         
         ordering = params.get("ordering")
 
-        querys = Place.objects.all()
+        querys = Place.objects.select_related(
+            'organization_id', 
+            'zone_id', 
+            'cover_image'
+        )
         
         if place_type == "restaurant":
             # Si se piden "restaurant", incluir toda la categoría gastronomía

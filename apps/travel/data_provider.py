@@ -75,6 +75,11 @@ def get_activities_with_scores(user, zone, experiencias, top_k=150):
     """
     try:
         # 1. Obtener ambos tipos de recomendaciones
+        # ---
+        # NOTA: Si 'recommend_places' también devuelve objetos "lazy",
+        # el problema N+1 persistirá. El fix de abajo (en el 'except')
+        # solo funciona si 'recommend_places' falla y se ejecuta el fallback.
+        # ---
         recommended_activities = recommend_places(user, 'activity', zone, top_k=top_k)
         recommended_places = recommend_places(user, 'place', zone, top_k=top_k)
         
@@ -140,8 +145,14 @@ def get_activities_with_scores(user, zone, experiencias, top_k=150):
         
     except Exception as e:
         logger.warning(f"Error getting combined activities, using fallback: {e}")
-        # fallback solo usará ActivityService
-        activities_qs = ActivityService.objects.all()
+        
+        # Cargar todos los datos necesarios en una sola consulta
+        activities_qs = ActivityService.objects.select_related('place_id').only(
+            'service_id', 'name', 'description', 'rating', 'price', 
+            'duration_minutes', 'category', 'tags',
+            'place_id', 'place_id__coordinates' # Cargar coordenadas relacionadas
+        )
+        
         if zone:
             activities_qs = activities_qs.filter(place_id__zone_id=zone)
         
@@ -175,7 +186,13 @@ def get_accommodations(user, zone, top_k=30):
     except Exception as e:
         logger.warning(f"Error getting accommodations from recommendation service, using fallback: {e}")
         interesting_types = [pt.value for pt in constants.ACCOMMODATION_TYPES]
-        accommodations_qs = Place.objects.filter(type__in=interesting_types)
+        
+        # --- ACCOMMODATIONS (PLACE) FALLBACK ---
+        accommodations_qs = Place.objects.filter(type__in=interesting_types).only(
+            'place_id', 'name', 'description', 'rating', 
+            'average_price', 'coordinates', 'type', 'zone_id'
+        )
+        
         if zone:
             accommodations_qs = accommodations_qs.filter(zone_id=zone)
         return list(accommodations_qs.order_by('-rating')[:top_k])
@@ -190,7 +207,13 @@ def get_restaurants(user, zone, top_k=60):
     except Exception as e:
         logger.warning(f"Error getting restaurants from recommendation service, using fallback: {e}")
         interesting_types = [pt.value for pt in constants.RESTAURANT_TYPES]
-        restaurants_qs = Place.objects.filter(type__in=interesting_types)
+        
+        # --- RESTAURANTS (PLACE) FALLBACK ---
+        restaurants_qs = Place.objects.filter(type__in=interesting_types).only(
+            'place_id', 'name', 'description', 'rating', 
+            'average_price', 'coordinates', 'type', 'zone_id'
+        )
+        
         if zone:
             restaurants_qs = restaurants_qs.filter(zone_id=zone)
         return list(restaurants_qs.order_by('-rating')[:top_k])
@@ -226,10 +249,16 @@ def get_events(user, zone, start_date, end_date, is_same_day, current_time, _is_
         
     except Exception as e:
         logger.warning(f"Error getting events from recommendation service, using fallback: {e}")
-        events_qs = Event.objects.filter(
+        
+        # ---  EVENTS FALLBACK ---
+        events_qs = Event.objects.select_related('place_id').filter(
             Q(start_date__lte=end_date + timedelta(hours=6)) &
             Q(end_date__gte=start_date)
+        ).only(
+            'event_id', 'name', 'description', 'rating', 'start_date', 'end_date', 'price',
+            'place_id', 'place_id__coordinates' # Cargar coordenadas relacionadas
         )
+        
         if is_same_day:
             events_qs = events_qs.filter(end_date__gte=current_time)
         if zone:
