@@ -53,23 +53,8 @@ services:
     networks:
       - default
 
-  metabase:
-    image: metabase/metabase:latest
-    ports:
-      - "3000:3000"
-    environment:
-      MB_SITE_URL: ${METABASE_SITE_URL}
-      MB_LOCALE: "es"
-      MB_DB_FILE: "/metabase-data/metabase.db"
-      MB_EMBEDDING_APP_SECRET: ${MB_EMBEDDING_APP_SECRET}
-    volumes:
-      - metabase_data:/metabase-data
-    networks:
-      - default
-
 
 volumes:
-  metabase_data:
   redis_data:
 
 networks:
