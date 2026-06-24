@@ -19,7 +19,7 @@ load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
@@ -70,10 +70,17 @@ DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 # ALLOWED_HOSTS desde env: DJANGO_ALLOWED_HOSTS=ip,dominio,otro
 _raw_hosts = os.getenv("DJANGO_ALLOWED_HOSTS", "")
-ALLOWED_HOSTS = [h.strip() for h in _raw_hosts.split(",") if h.strip()]
-if not ALLOWED_HOSTS:
-    # fallback útil en dev/local
-    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+if _raw_hosts:
+    ALLOWED_HOSTS = [h.strip() for h in _raw_hosts.split(",") if h.strip()]
+else:
+    # Fallback por si falta la variable de entorno
+    ALLOWED_HOSTS = [
+        "api.amukan.travel",
+        "amukan.travel",
+        "www.amukan.travel",
+        "127.0.0.1",
+        "localhost",
+    ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -174,14 +181,27 @@ AUTHENTICATION_BACKENDS = [
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://localhost:5174",
+    "http://localhost:3080",
+    "http://localhost:3081",
     "https://amukan.travel",
     "https://www.amukan.travel",
+    "https://dev.amukan.travel",
 ]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+
+    # Rate limiting global, es alto para no afectar el uso normal, wasap
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/min',    # invitados: hasta 100 req/min (tu front no se acerca a esto)
+        'user': '5000/day',   # usuarios autenticados: hasta 5000 req/día
+    },
 }
 
 SIMPLE_JWT = {
@@ -193,7 +213,16 @@ SIMPLE_JWT = {
 #Agregado para Metabase
 
 CORS_ALLOW_CREDENTIALS = True
-CSRF_TRUSTED_ORIGINS = ["http://localhost:5173","https://amukan.travel","https://www.amukan.travel",]
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:3080",
+    "http://localhost:3081",
+    "https://amukan.travel",
+    "https://www.amukan.travel",
+    "https://dev.amukan.travel",
+    "https://api.amukan.travel",
+    "https://api-dev.amukan.travel",
+]
 
 LOGGING = {
     'version': 1,
@@ -270,3 +299,23 @@ S3_ENDPOINT_PUBLIC = os.getenv("S3_ENDPOINT_PUBLIC", "http://localhost:9000")
 
 # Nombre del bucket (opcional, si lo usas en build_public_url)
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "amukan")
+
+#=======================================================================
+# Security 
+#=======================================================================
+
+if ENVIRONMENT == "production":
+    # Cookies solo se enviarán por HTTPS
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
+    # HSTS: indica al navegador que siempre use HTTPS durante 30 días
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30  # 30 días
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # Otras cabeceras de endurecimiento
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
+
+

@@ -1,15 +1,15 @@
 services:
   web:
-    image: amukan-backend-web:prod
+    image: amukan-backend-web:dev
     build:
       context: .
       dockerfile: Dockerfile
     env_file:
-      - .env.prod
+      - .env.dev
     ports:
-      - "8000:8000"
-    #volumes:
-      #- .:/app
+      - "8001:8000"
+    volumes:
+      - .:/app
     depends_on:
       redis:
         condition: service_healthy
@@ -32,27 +32,23 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
       UPLOAD_ALLOWED_CONTENT_TYPES: ${UPLOAD_ALLOWED_CONTENT_TYPES:-image/jpeg,image/png,image/webp}
-      
       HF_API_TOKEN: ${HF_API_TOKEN}
-    networks:
-      - default
-    
     command: >
       sh -c "python manage.py migrate && 
-             gunicorn amukan.wsgi:application --bind 0.0.0.0:8000 --workers 4"
+             python manage.py runserver 0.0.0.0:8000"
 
   db:
     build:
       context: .
       dockerfile: Dockerfile.postgres
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_dev_data:/var/lib/postgresql/data
       - ./init_pgvector.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
@@ -62,26 +58,18 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: redis_cache
+    container_name: redis_dev_cache
     restart: always
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
-      - redis_data:/data
+      - redis_dev_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - default
-
 
 volumes:
-  redis_data:
-  postgres_data:
-
-networks:
-  default:
-    driver: bridge
-    enable_ipv6: false
+  redis_dev_data:
+  postgres_dev_data:

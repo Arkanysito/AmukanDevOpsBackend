@@ -12,6 +12,8 @@ static_collected/
 .env
 .prod.env
 .env.prod
+.env.dev
+.env.*
 venv/
 env/
 
