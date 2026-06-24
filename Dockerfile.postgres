@@ -8,3 +8,6 @@ RUN apt-get update && \
         postgresql-15-postgis-3 \
         postgresql-15-postgis-3-scripts && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Copiar script de inicialización de base de datos directamente al build
+COPY init_pgvector.sql /docker-entrypoint-initdb.d/init.sql
