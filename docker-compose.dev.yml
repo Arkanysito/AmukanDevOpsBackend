@@ -1,6 +1,6 @@
 services:
   web:
-    image: amukan-backend-web:dev
+    image: amukan-backend-web:${BUILD_NUMBER:-dev}
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,8 +8,8 @@ services:
       - .env.dev
     ports:
       - "8001:8000"
-    volumes:
-      - .:/app
+#    volumes:
+#      - .:/app
     depends_on:
       redis:
         condition: service_healthy
