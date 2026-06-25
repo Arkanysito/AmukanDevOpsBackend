@@ -187,6 +187,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://www.amukan.travel",
     "https://dev.amukan.travel",
     "http://dev.amukan.travel",
+    "http://prod.amukan.travel",
 ]
 
 REST_FRAMEWORK = {
@@ -223,6 +224,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://dev.amukan.travel",
     "https://api.amukan.travel",
     "https://api-dev.amukan.travel",
+    "http://prod.amukan.travel",
 ]
 
 LOGGING = {
