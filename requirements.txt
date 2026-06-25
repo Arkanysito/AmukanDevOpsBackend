@@ -16,6 +16,7 @@ shapely==2.0.4
 
 # Dependencias de ML/API
 requests
+pytz
 numpy==1.26.4
 huggingface-hub
 
