@@ -186,6 +186,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://amukan.travel",
     "https://www.amukan.travel",
     "https://dev.amukan.travel",
+    "http://dev.amukan.travel",
 ]
 
 REST_FRAMEWORK = {
